@@ -1,0 +1,12 @@
+[
+{
+  "directory": "/home/greaten/projects/test/CL-CBS",
+  "command": "/usr/bin/c++ -DBOOST_ALL_NO_LIB -DBOOST_PROGRAM_OPTIONS_DYN_LINK -I/home/greaten/projects/test/CL-CBS/include -I/usr/include/ompl-1.5 -I/usr/include/eigen3  -Wall -Wextra -std=c++14 -o CMakeFiles/SH_Astar.dir/src/sh_astar.cpp.o -c /home/greaten/projects/test/CL-CBS/src/sh_astar.cpp",
+  "file": "/home/greaten/projects/test/CL-CBS/src/sh_astar.cpp"
+},
+{
+  "directory": "/home/greaten/projects/test/CL-CBS",
+  "command": "/usr/bin/c++ -DBOOST_ALL_NO_LIB -DBOOST_PROGRAM_OPTIONS_DYN_LINK -I/home/greaten/projects/test/CL-CBS/include -I/usr/include/ompl-1.5 -I/usr/include/eigen3  -Wall -Wextra -std=c++14 -o CMakeFiles/CL-CBS.dir/src/cl_cbs.cpp.o -c /home/greaten/projects/test/CL-CBS/src/cl_cbs.cpp",
+  "file": "/home/greaten/projects/test/CL-CBS/src/cl_cbs.cpp"
+}
+]
