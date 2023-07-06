@@ -46,6 +46,12 @@ set(ALL_SOURCE_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/include/environment.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/sh_astar.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/cl_cbs.cpp
+
+  # new stuffs
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/cl_ecbs.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/focal_hybrid_astar.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/cl_ecbs.cpp
+  
 )
 
 add_custom_target(clang-format
@@ -102,6 +108,18 @@ target_link_libraries(CL-CBS
   ${OMPL_LIBRARIES}
   yaml-cpp
 )
+
+
+## ecbs
+add_executable(CL-ECBS
+  src/cl_ecbs.cpp
+)
+target_link_libraries(CL-ECBS
+  ${Boost_LIBRARIES}
+  ${OMPL_LIBRARIES}
+  yaml-cpp
+)
+
 
 ## test CL-CBS
 # add_executable(test
