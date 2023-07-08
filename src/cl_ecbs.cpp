@@ -5,7 +5,7 @@
 #include <boost/program_options.hpp>
 
 #include <yaml-cpp/yaml.h>
-
+#include "config.hpp"
 #include "cl_ecbs.hpp"
 #include "timer.hpp"
 #include <boost/numeric/ublas/matrix.hpp>
