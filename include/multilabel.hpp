@@ -23,29 +23,29 @@ namespace libMultiRobotPlanning
     {
     public:
         MultiLabelHybridAstar(Environment &env, double w): m_env(env),m_w(w){}
-        ~FocalHybridAStar() {}
+        ~MultiLabelHybridAstar() {}
 
-        bool search(const State &startState, PlanResult<State, Action, Cost> &solution)
-        {
-            solution.states.clear();
-            solution.actions.clear();
-            solution.cost = 0;
-            openSet_t openSet;
-            focalSet_t focalSet;
-            std::unordered_map<uint64_t, fibHeapHandle_t, std::hash<uint64_t>> stateToHeap;
-            std::unordered_set<uint64_t, std::hash<uint64_t>> closedSet;
-            std::unordered_map<State, std::tuple<State, Action, Cost, Cost>,StateHasher>cameFrom;
-            auto handle = openSet.push(Node(startState, Action(),
-                                            m_env.admissibleHeuristic(startState), 0,0));
+        // bool search(const State &startState, PlanResult<State, Action, Cost> &solution)
+        // {
+        //     solution.states.clear();
+        //     solution.actions.clear();
+        //     solution.cost = 0;
+        //     openSet_t openSet;
+        //     focalSet_t focalSet;
+        //     std::unordered_map<uint64_t, fibHeapHandle_t, std::hash<uint64_t>> stateToHeap;
+        //     std::unordered_set<uint64_t, std::hash<uint64_t>> closedSet;
+        //     std::unordered_map<State, std::tuple<State, Action, Cost, Cost>,StateHasher>cameFrom;
+        //     auto handle = openSet.push(Node(startState, Action(),
+        //                                     m_env.admissibleHeuristic(startState), 0,0));
 
-            stateToHeap.insert(std::make_pair<>(m_env.calcIndex(startState), handle));
-            (*handle).handle = handle;
-            focalSet.push(handle);
-            std::vector<Neighbor<State, Action, Cost>> neighbors;
-            neighbors.reserve(10);
-            Cost bestFScore = (*handle).fScore;
-            while()
-        }
+        //     stateToHeap.insert(std::make_pair<>(m_env.calcIndex(startState), handle));
+        //     (*handle).handle = handle;
+        //     focalSet.push(handle);
+        //     std::vector<Neighbor<State, Action, Cost>> neighbors;
+        //     neighbors.reserve(10);
+        //     Cost bestFScore = (*handle).fScore;
+        //     while()
+        // }
 
 
   
