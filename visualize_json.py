@@ -11,7 +11,7 @@ import numpy as np
 import yaml
 import json
 import matplotlib
-matplotlib.use("Qt5Agg")
+# matplotlib.use("Qt5Agg")
 
 PLOTLINE = True  # True
 
@@ -32,8 +32,10 @@ class Animation:
     def __init__(self, map, schedule):
         self.map = map
         self.schedule = schedule
-
-        aspect = map["map"]["dimensions"][0] / map["map"]["dimensions"][1]
+        self.num_agents=len(map["starts"])
+        print("num_agents=",self.num_agents,len(schedule["paths"]))
+        # print()
+        aspect = map["xmax"] / map["ymax"]
 
         self.fig = plt.figure(frameon=False, figsize=(8 * aspect, 8))
         self.ax = self.fig.add_subplot(111, aspect='equal')
@@ -44,15 +46,15 @@ class Animation:
         self.patches = []
         self.artists = []
         self.lines = []
-        self.list_xdata = [[] for _ in range(0, len(map["agents"]))]
-        self.list_ydata = [[] for _ in range(0, len(map["agents"]))]
+        self.list_xdata = [[] for _ in range(0, self.num_agents)]
+        self.list_ydata = [[] for _ in range(0, self.num_agents)]
         self.agents = dict()
         self.agent_names = dict()
         # create boundary patch
         xmin = -1
         ymin = -1
-        xmax = map["map"]["dimensions"][0] + 0.5
-        ymax = map["map"]["dimensions"][1] + 0.5
+        xmax = map["xmax"] + 0.5
+        ymax = map["ymax"] + 0.5
 
         # self.ax.relim()
         plt.xlim(xmin, xmax)
@@ -66,41 +68,58 @@ class Animation:
         self.ax.axis('off')
 
         self.patches.append(Rectangle(
-            (xmin, ymin), xmax - xmin, ymax - ymin, facecolor='none', edgecolor='red'))
-        for o in map["map"]["obstacles"]:
-            x, y = o[0], o[1]
-            self.patches.append(
-                Circle((x, y), obsRadius, facecolor='grey', edgecolor='grey'))
+            (xmin, ymin), width=xmax - xmin,height= ymax - ymin,angle=0, facecolor='none', edgecolor='red'))
+        try:
+            for o in map["obstacles"]:
+                x, y = o[0], o[1]
+                self.patches.append(
+                    Circle((x, y), obsRadius, facecolor='grey', edgecolor='grey'))
+        except:
+            pass
             # Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor='red', edgecolor='red'))
 
         # create agents:
         self.T = 0
-        cmap = get_cmap(len(map["agents"])+1)
+        cmap = get_cmap(self.num_agents+1)
+        # to do : draw the intermeidate waypoints
         # draw goals first
-        for d, i in zip(map["agents"], range(0, len(map["agents"]))):
+        for i in range(self.num_agents):
+            start=self.map["starts"][i]
+            final_goal=self.map["goals"][i][-1]
             cw = carWidth
             lb = LB
             lf = LF
             self.patches.append(Rectangle(
-                (d["goal"][0] - math.sqrt(cw/2*cw/2+lb*lb) * math.sin(math.atan2(lb, cw/2)+d["goal"][2]),
-                 d["goal"][1] - math.sqrt(cw/2*cw/2+lb*lb) * math.cos(math.atan2(lb, cw/2)+d["goal"][2])),
-                lb+lf, cw, -d["goal"][2] / math.pi * 180,
+                (final_goal[0] - math.sqrt(cw/2*cw/2+lb*lb) * math.sin(math.atan2(lb, cw/2)+final_goal[2]),
+                 final_goal[1] - math.sqrt(cw/2*cw/2+lb*lb) * math.cos(math.atan2(lb, cw/2)+final_goal[2])),
+                lb+lf, cw, -final_goal[2] / math.pi * 180,
                 facecolor='none', edgecolor=cmap(i+1),  alpha=0.7, lw=1, linestyle=":"))
-            self.list_xdata[i].append(d["start"][0])
-            self.list_ydata[i].append(d["start"][1])
+            self.list_xdata[i].append(start[0])
+            self.list_ydata[i].append(start[1])
             line, = self.ax.plot(
                 self.list_xdata[i], self.list_ydata[i], color=cmap(i+1),  alpha=0.3, lw=2, linestyle="-.")
             self.lines.append(line)
 
-        for d, i in zip(map["agents"], range(0, len(map["agents"]))):
-            name = d["name"]
+
+        for i in range(self.num_agents):
+            for waypoint in self.map["goals"][i]:
+                x,y,yaw=waypoint
+                star_handle, = self.ax.plot(x, y, marker='*', color=cmap(i+1),markersize=10)
+                self.patches.append(star_handle)
+        
+
+        for i in range(self.num_agents):
+            # name = d["name"]
+            name=i
+            start=self.map["starts"][i]
+            print(start)
             self.agents[name] = Rectangle(
-                (d["start"][0], d["start"][1]), 1, 2, 0.0, edgecolor='black', alpha=0.7)
+                (start[0], start[1]), width=(lb+lf), height=carWidth, angle=0.0, edgecolor=  'black', alpha=0.7)
             self.agents[name].original_face_color = cmap(i+1)
             self.patches.append(self.agents[name])
-            self.T = max(self.T, schedule["schedule"][name][-1]["t"])
+            self.T = max(self.T, len(schedule["paths"][i])-1)
             self.agent_names[name] = self.ax.text(
-                d["start"][0], d["start"][1], name.replace('agent', ''), fontsize=6)
+                start[0], start[1], str(name), fontsize=6)
             self.agent_names[name].set_horizontalalignment('center')
             self.agent_names[name].set_verticalalignment('center')
             self.artists.append(self.agent_names[name])
@@ -141,34 +160,30 @@ class Animation:
         return self.patches + self.artists
 
     def animate_func(self, i):
-        for agent_name in self.schedule["schedule"]:
-            agent = schedule["schedule"][agent_name]
-            pos = self.getState(i / framesPerMove, agent)
+        for id,path in enumerate(self.schedule["paths"]):
+            # agent = schedule["paths"][agent_name]
+            pos = self.getState(i / framesPerMove, path)
             p = (pos[0], pos[1])
+            print(p,i)
             # print(pos[0], pos[1], -pos[2] / 3.15159 * 180)'
             cw = carWidth
             lb = LB
             lf = LF
 
-            self.agents[agent_name]._x0 = pos[0] - \
+            self.agents[id]._x0 = pos[0] - \
                 math.sqrt(cw/2*cw/2+lb*lb) * \
                 math.sin(math.atan2(lb, cw/2)+pos[2])
-            self.agents[agent_name]._y0 = pos[1] - \
+            self.agents[id]._y0 = pos[1] - \
                 math.sqrt(cw/2*cw/2+lb*lb) * \
                 math.cos(math.atan2(lb, cw/2)+pos[2])
-            self.agents[agent_name]._x1 = self.agents[agent_name]._x0 + lb+lf
-            self.agents[agent_name]._y1 = self.agents[agent_name]._y0 + cw
-            self.agents[agent_name].angle = -pos[2] / math.pi * 180
-            self.agent_names[agent_name].set_position(p)
+            self.agents[id]._x1 = self.agents[id]._x0 + lb+lf
+            self.agents[id]._y1 = self.agents[id]._y0 + cw
+            self.agents[id].angle = -pos[2] / math.pi * 180
+            self.agent_names[id].set_position(p)
             if PLOTLINE:
-                self.list_xdata[int(agent_name.replace(
-                    "agent", ""))].append(pos[0])
-                self.list_ydata[int(agent_name.replace(
-                    "agent", ""))].append(pos[1])
-                self.lines[int(agent_name.replace(
-                    "agent", ""))].set_data(self.list_xdata[int(agent_name.replace(
-                        "agent", ""))], self.list_ydata[int(agent_name.replace(
-                            "agent", ""))])
+                self.list_xdata[id].append(pos[0])
+                self.list_ydata[id].append(pos[1])
+                self.lines[id].set_data(self.list_xdata[id], self.list_ydata[id])
 
         # reset all colors
         for _, agent in self.agents.items():
@@ -178,27 +193,28 @@ class Animation:
 
     def getState(self, t, d):
         idx = 0
-        while idx < len(d) and d[idx]["t"] < t:
+        while idx < len(d) and idx<t:
             idx += 1
         if idx == 0:
-            return np.array([float(d[0]["x"]), float(d[0]["y"]), float(d[0]["yaw"])])
+            return np.array([float(d[0][0]), float(d[0][1]), float(d[0][2])])
         elif idx < len(d):
-            yawLast = float(d[idx-1]["yaw"])
-            yawNext = float(d[idx]["yaw"])
+            yawLast = float(d[idx-1][2])
+            yawNext = float(d[idx][2])
             if (yawLast - yawNext) > math.pi:
                 yawLast = yawLast - 2 * math.pi
             elif (yawNext - yawLast) > math.pi:
                 yawLast = yawLast + 2 * math.pi
             posLast = np.array(
-                [float(d[idx-1]["x"]), float(d[idx-1]["y"]), yawLast])
+                [float(d[idx-1][0]), float(d[idx-1][1]), yawLast])
             posNext = np.array(
-                [float(d[idx]["x"]), float(d[idx]["y"]), yawNext])
-            dt = d[idx]["t"] - d[idx-1]["t"]
-            t = (t - d[idx-1]["t"]) / dt
+                [float(d[idx][0]), float(d[idx][1]), yawNext])
+            # dt = d[idx]["t"] - d[idx-1]["t"]
+            dt=1
+            t = (t - (idx-1)) / dt
             pos = (posNext - posLast) * t + posLast
             return pos
         else:
-            return np.array([float(d[-1]["x"]), float(d[-1]["y"]), float(d[-1]["yaw"])])
+            return np.array([float(d[-1][0]), float(d[-1][1]), float(d[-1][2])])
 
 
 if __name__ == "__main__":
@@ -214,10 +230,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with open(args.map) as map_file:
-        map = yaml.load(map_file, Loader=yaml.FullLoader)
+        # map = yaml.load(map_file, Loader=yaml.FullLoader)
+        map=json.load(map_file)
 
     with open(args.schedule) as states_file:
-        schedule = yaml.load(states_file, Loader=yaml.FullLoader)
+        # schedule = yaml.load(states_file, Loader=yaml.FullLoader)
+        schedule=json.load(states_file)
 
     try:
         with open(os.path.abspath(os.path.join(
@@ -239,5 +257,5 @@ if __name__ == "__main__":
         matplotlib.use("Agg")
         animation.save(args.video, args.speed)
     else:
-        matplotlib.use("Qt5Agg")
+        # matplotlib.use("Qt5Agg")
         animation.show()

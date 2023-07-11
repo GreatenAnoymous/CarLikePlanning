@@ -25,6 +25,7 @@ namespace libMultiRobotPlanning
 
             for (size_t i = 0; i < initialStates.size(); ++i)
             {
+                std::cout << "searching for the initial solution for agent i" << i << std::endl;
                 if (i < solution.size() && solution[i].states.size() > 1)
                 {
                     std::cout << initialStates[i] << " " << solution[i].states.front().first
@@ -196,13 +197,14 @@ namespace libMultiRobotPlanning
                     LowLevelSearch_t lowLevel(llenv, m_w);
                     bool success = lowLevel.search(initialStates[i], newNode.solution[i]);
 
-                    newNode.cost += newNode.solution[i].cost;
-                    newNode.LB += newNode.solution[i].fmin;
-                    newNode.focalHeuristic = m_env.focalHeuristic(newNode.solution);
-
                     if (success)
                     {
+                        newNode.cost += newNode.solution[i].cost;
+                        newNode.LB += newNode.solution[i].fmin;
                         std::cout << "  success. cost: " << newNode.cost << std::endl;
+
+                        newNode.focalHeuristic = m_env.focalHeuristic(newNode.solution);
+
                         auto handle = open.push(newNode);
                         (*handle).handle = handle;
                         if (newNode.cost <= bestCost * m_w)

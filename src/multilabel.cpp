@@ -6,7 +6,8 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include "multilabel.hpp"
+#include "cl_ecbs.hpp"
+// #include "multilabel.hpp"
 #include "timer.hpp"
 #include "config.hpp"
 
@@ -14,7 +15,7 @@
 
 #include "json.hpp"
 
-using libMultiRobotPlanning::MultiLabelHybridAstar;
+using libMultiRobotPlanning::ECBS;
 using libMultiRobotPlanning::Neighbor;
 using libMultiRobotPlanning::PlanResult;
 
@@ -109,7 +110,7 @@ struct State
 
     bool operator==(const State &s) const
     {
-        return std::tie(time, x, y, yaw) == std::tie(s.time, s.x, s.y, s.yaw);
+        return std::tie(time, x, y, yaw, label) == std::tie(s.time, s.x, s.y, s.yaw, s.label);
     }
 
     bool agentCollision(const State &other) const
@@ -155,7 +156,7 @@ struct State
 
     friend std::ostream &operator<<(std::ostream &os, const State &s)
     {
-        return os << "(" << s.x << "," << s.y << ":" << s.yaw << ")@" << s.time;
+        return os << "(" << s.x << "," << s.y << ":" << s.yaw << ")@" << s.time << " label=" << s.label;
     }
 
     int time;
@@ -181,6 +182,7 @@ namespace std
             boost::hash_combine(seed, s.x);
             boost::hash_combine(seed, s.y);
             boost::hash_combine(seed, s.yaw);
+            boost::hash_combine(seed, s.label);
             return seed;
         }
     };
@@ -355,6 +357,14 @@ public:
                       << " high level nodes.\n";
     }
 
+    void onExpandLowLevelNode(const State & /*s*/, int /*fScore*/,
+                              int /*gScore*/)
+    {
+        m_lowLevelExpanded++;
+    }
+
+    int lowLevelExpanded() const { return m_lowLevelExpanded; }
+
     int highLevelExpanded() { return m_highLevelExpanded; }
 
     void setLowLevelContext(size_t agentIdx, const Constraints *constraints)
@@ -412,11 +422,11 @@ public:
         return false;
     }
 
-    double admissibleHeuristic(const State &s, int label = -1)
+    double admissibleHeuristic(const State &s)
     {
         assert(s.label < m_goals[m_agentIdx].size());
 
-        if (label == m_goals[m_agentIdx].size() - 1)
+        if (s.label == m_goals[m_agentIdx].size() - 1)
         {
             ompl::base::ReedsSheppStateSpace reedsSheppPath(Constants::r);
             OmplState *rsStart = (OmplState *)reedsSheppPath.allocState();
@@ -441,19 +451,18 @@ public:
                                               static_cast<int>(m_goals[m_agentIdx].back().y)),
                                          2));
             int vid = getVid(static_cast<int>(m_goals[m_agentIdx].back().x / Constants::mapResolution), static_cast<int>(m_goals[m_agentIdx].back().y / Constants::mapResolution));
-            double twoDCost =
-                holonomic_cost_maps[vid]
-                                   [static_cast<int>(s.x / Constants::mapResolution)]
-                                   [static_cast<int>(s.y / Constants::mapResolution)] -
-                twoDoffset;
+            double twoDCost =0;
+                // holonomic_cost_maps[vid]
+                //                    [static_cast<int>(s.x / Constants::mapResolution)]
+                //                    [static_cast<int>(s.y / Constants::mapResolution)] -
+                // twoDoffset;
             // std::cout << "holonomic cost:" << twoDCost << std::endl;
 
             return std::max({reedsSheppCost, euclideanCost, twoDCost});
         }
         else
         { // before reaching the goal position, we don't need to consider the yaw position
-            if (label == -1)
-                return -1;
+            int label = s.label;
             double euclideanCost = sqrt(pow(m_goals[m_agentIdx][label].x - s.x, 2) +
                                         pow(m_goals[m_agentIdx][label].y - s.y, 2));
             for (int i = label; i < m_goals[m_agentIdx].size() - 1; i++)
@@ -463,21 +472,21 @@ public:
             }
 
             double twoDCost = 0;
-            for (int i = label; i < m_goals[m_agentIdx].size() - 1; i++)
-            {
-                if (i == label)
-                {
-                    int vid = getVid(static_cast<int>(m_goals[m_agentIdx][label].x / Constants::mapResolution), static_cast<int>(m_goals[m_agentIdx][label].y / Constants::mapResolution));
-                    twoDCost += holonomic_cost_maps[vid][static_cast<int>(s.x / Constants::mapResolution)][static_cast<int>(s.y / Constants::mapResolution)];
-                }
-                else
-                {
-                    int vid = getVid(static_cast<int>(m_goals[m_agentIdx][label + 1].x / Constants::mapResolution), static_cast<int>(m_goals[m_agentIdx][label + 1].x / Constants::mapResolution));
-                    int sx_ind = static_cast<int>(m_goals[m_agentIdx][label].x / Constants::mapResolution);
-                    int sy_ind = static_cast<int>(m_goals[m_agentIdx][label].y / Constants::mapResolution);
-                    twoDCost += holonomic_cost_maps[vid][sx_ind][sy_ind];
-                }
-            }
+            // for (int i = label; i < m_goals[m_agentIdx].size() - 1; i++)
+            // {
+            //     if (i == label)
+            //     {
+            //         int vid = getVid(static_cast<int>(m_goals[m_agentIdx][label].x / Constants::mapResolution), static_cast<int>(m_goals[m_agentIdx][label].y / Constants::mapResolution));
+            //         twoDCost += holonomic_cost_maps[vid][static_cast<int>(s.x / Constants::mapResolution)][static_cast<int>(s.y / Constants::mapResolution)];
+            //     }
+            //     else
+            //     {
+            //         int vid = getVid(static_cast<int>(m_goals[m_agentIdx][label + 1].x / Constants::mapResolution), static_cast<int>(m_goals[m_agentIdx][label + 1].x / Constants::mapResolution));
+            //         int sx_ind = static_cast<int>(m_goals[m_agentIdx][label].x / Constants::mapResolution);
+            //         int sy_ind = static_cast<int>(m_goals[m_agentIdx][label].y / Constants::mapResolution);
+            //         twoDCost += holonomic_cost_maps[vid][sx_ind][sy_ind];
+            //     }
+            // }
             return std::max(twoDCost, euclideanCost);
         }
         // non-holonomic-without-obstacles heuristic: use a Reeds-Shepp
@@ -635,6 +644,7 @@ public:
                 for (auto iter = next_path.begin(); iter != next_path.end(); iter++)
                 {
                     State next_s = iter->first;
+                    next_s.label=state.label;
                     gscore += iter->second;
                     if (!(next_s == path.back()))
                     {
@@ -656,7 +666,7 @@ public:
             return false;
         }
 
-        // m_goals[m_agentIdx] = path.back();
+        m_goals[m_agentIdx].back() = path.back();
 
         _camefrom.insert(cameFrom.begin(), cameFrom.end());
         return true;
@@ -665,7 +675,10 @@ public:
     State getGoal() { return m_goals[m_agentIdx].back(); }
     uint64_t calcIndex(const State &s)
     {
-        return (uint64_t)s.time * (2 * M_PI / Constants::deltat) *
+        return (uint64_t)s.time * m_goals[m_agentIdx].size() * (2 * M_PI / Constants::deltat) *
+                   (m_dimx / Constants::xyResolution) *
+                   (m_dimy / Constants::xyResolution) +
+               (uint64_t)s.label * (2 * M_PI / Constants::deltat) *
                    (m_dimx / Constants::xyResolution) *
                    (m_dimy / Constants::xyResolution) +
                (uint64_t)(Constants::normalizeHeadingRad(s.yaw) /
@@ -677,7 +690,7 @@ public:
                (uint64_t)(s.x / Constants::xyResolution);
     }
 
-private:
+public:
     State getState(size_t agentIdx,
                    const std::vector<PlanResult<State, Action, double>> &solution,
                    size_t t)
@@ -730,6 +743,7 @@ private:
                       std::vector<Neighbor<State, Action, double>> &neighbors)
     {
         neighbors.clear();
+        int curr_label = s.label;
         double g = Constants::dx[0];
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
@@ -761,16 +775,31 @@ private:
             { // backwards
                 g = g * Constants::penaltyReversing;
             }
-            State tempState(xSucc, ySucc, yawSucc, s.time + 1);
+            State tempState(xSucc, ySucc, yawSucc, s.time + 1, curr_label);
+
+            if (curr_label < m_goals[m_agentIdx].size() - 1)
+            {
+                // arrived at the current goal position
+
+                if (sqrt(pow(s.x - m_goals[m_agentIdx][curr_label].x, 2) + pow(s.y - m_goals[m_agentIdx][curr_label].y, 2)) < Constants::mapResolution/2.0)
+                {
+                    tempState.label++;
+                    std::cout << "agent " << m_agentIdx << "  has arrived the " << curr_label << " th goal " << m_goals[m_agentIdx][curr_label] << std::endl;
+                }
+            }
             if (stateValid(tempState))
             {
+                
                 neighbors.emplace_back(
                     Neighbor<State, Action, double>(tempState, act, g));
+            }
+            else{
+                std::cout<<"state not Valid"<<std::endl;
             }
         }
         // wait
         g = Constants::dx[0];
-        State tempState(s.x, s.y, s.yaw, s.time + 1);
+        State tempState(s.x, s.y, s.yaw, s.time + 1,curr_label);
         if (stateValid(tempState))
         {
             neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
@@ -806,6 +835,7 @@ private:
         std::ifstream file("preprocessed.bin", std::ios::binary);
         if (loadPreprocessedData(holonomic_cost_maps))
         {
+            std::cout << "load the preprocessed data" << std::endl;
             return;
         }
 
@@ -915,7 +945,7 @@ private:
                 ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
                         Constants::dy[act] * cos(-s.yaw);
                 yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
-                State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1);
+                State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1,s.label);
                 if (!stateValid(nextState))
                     return false;
                 result.emplace_back(std::make_pair<>(nextState, Constants::dx[0]));
@@ -938,7 +968,7 @@ private:
                 ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
                         Constants::dy[act] * cos(-s.yaw);
                 yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
-                State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1);
+                State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1,s.label);
                 if (!stateValid(nextState))
                     return false;
                 result.emplace_back(std::make_pair<>(
@@ -962,7 +992,7 @@ private:
         ySucc = s.y + dx * sin(-s.yaw) + dy * cos(-s.yaw);
         yawSucc = Constants::normalizeHeadingRad(s.yaw + dyaw);
         // std::cout << m_agentIdx << " ratio::" << ratio << std::endl;
-        State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1);
+        State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1,s.label);
         if (!stateValid(nextState))
             return false;
         result.emplace_back(std::make_pair<>(nextState, ratio * Constants::dx[0]));
@@ -992,7 +1022,7 @@ private:
     int m_lowLevelExpanded;
 };
 
-void read_input(std::string filename, int &xmax, int &ymax, std::vector<std::vector<double>> obstacles, std::vector<std::vector<std::vector<double>>> &goals)
+void read_input(std::string filename, int &xmax, int &ymax, std::unordered_set<Location> &obstacles, std::vector<State> &starts, std::vector<std::vector<State>> &goals)
 {
     // Read the JSON file
     std::ifstream file(filename);
@@ -1015,6 +1045,9 @@ void read_input(std::string filename, int &xmax, int &ymax, std::vector<std::vec
         return;
     }
 
+    // std::vector<std::vector<double>> obstacle_vec;
+    // std::vector<std::vector<double>>  start_vec;
+    // std::vector<std::vector<std::vector<double>>> goal_vec;
     // Extract data from JSON
     try
     {
@@ -1027,7 +1060,21 @@ void read_input(std::string filename, int &xmax, int &ymax, std::vector<std::vec
             for (const auto &obstacle : data["obstacles"])
             {
                 std::vector<double> obstacleCoords = obstacle;
-                obstacles.push_back(obstacleCoords);
+                // obstacle_vec.push_back(obstacleCoords);
+                obstacles.insert(Location(obstacleCoords[0], obstacleCoords[1]));
+            }
+        }
+
+        // Read starts
+        if (data.count("starts") > 0)
+        {
+            std::cout<<"starts size="<<data["starts"].size()<<std::endl;
+            for (const auto &svec : data["starts"])
+            {
+                std::vector<double> start = svec;
+
+                // obstacle_vec.push_back(obstacleCoords);
+                starts.push_back(State(svec[0], svec[1], svec[2]));
             }
         }
 
@@ -1037,7 +1084,13 @@ void read_input(std::string filename, int &xmax, int &ymax, std::vector<std::vec
             for (const auto &goal : data["goals"])
             {
                 std::vector<std::vector<double>> goalCoords = goal;
-                goals.push_back(goalCoords);
+                //
+                std::vector<State> gs;
+                for (auto &gi : goalCoords)
+                {
+                    gs.push_back(State(gi[0], gi[1], gi[2]));
+                }
+                goals.push_back(gs);
             }
         }
     }
@@ -1052,5 +1105,187 @@ void read_input(std::string filename, int &xmax, int &ymax, std::vector<std::vec
 
 int main(int argc, char *argv[])
 {
+
+    namespace po = boost::program_options;
+    // Declare the supported options.
+    po::options_description desc("Allowed options");
+    std::string inputFile;
+    std::string outputFile;
+    float w;
+    int batchSize;
+    desc.add_options()("help", "produce help message")(
+        "input,i", po::value<std::string>(&inputFile)->required(),
+        "input file (YAML)")("output,o",
+                             po::value<std::string>(&outputFile)->required(),
+                             "output file (YAML)")(
+        "suboptimality,w", po::value<float>(&w)->default_value(1.0),
+        "suboptimality bound")(
+        "batchsize,b", po::value<int>(&batchSize)->default_value(10), "batch size for iter");
+
+    try
+    {
+        po::variables_map vm;
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        po::notify(vm);
+
+        if (vm.count("help") != 0u)
+        {
+            std::cout << desc << "\n";
+            return 0;
+        }
+    }
+    catch (po::error &e)
+    {
+        std::cerr << e.what() << std::endl
+                  << std::endl;
+        std::cerr << desc << std::endl;
+        return 1;
+    }
+    // nlohmann::json map_config;
+    // try
+    // {
+        int dimx, dimy;
+        double timer = 0;
+        std::unordered_set<Location> obstacles;
+        std::multimap<int, State> dynamic_obstacles;
+        std::vector<std::vector<State>> goals;
+        std::vector<State> startStates;
+        read_input(inputFile, dimx, dimy, obstacles, startStates, goals);
+        std::cout << "dimx=" << dimx << "  "
+                  << "dimy=" << dimy << std::endl;
+        std::cout << "num agents=" << startStates.size() << std::endl;
+        for (auto state : startStates)
+        {
+            std::cout << state << std::endl;
+        }
+        Environment mapf(dimx, dimy, obstacles, dynamic_obstacles, goals);
+        ECBS<State, Action, double, Conflict, Constraints, Environment> ecbsHybrid(mapf);
+        std::vector<PlanResult<State, Action, double>> solution;
+        Timer iterTimer;
+        bool success = ecbsHybrid.search(startStates, solution);
+        iterTimer.stop();
+        timer += iterTimer.elapsedSeconds();
+        // std::ofstream out;
+        // out = std::ofstream(outputFile);
+
+        if (success)
+        {
+            std::cout << "\033[1m\033[32m Successfully find solution! \033[0m\n";
+
+            double makespan = 0, flowtime = 0, cost = 0;
+            for (const auto &s : solution)
+                cost += s.cost;
+
+            for (size_t a = 0; a < solution.size(); ++a)
+            {
+                // calculate makespan
+                double current_makespan = 0;
+                for (size_t i = 0; i < solution[a].actions.size(); ++i)
+                {
+                    // some action cost have penalty coefficient
+
+                    if (solution[a].actions[i].second < Constants::dx[0])
+                        current_makespan += solution[a].actions[i].second;
+                    else if (solution[a].actions[i].first % 3 == 0)
+                        current_makespan += Constants::dx[0];
+                    else
+                        current_makespan += Constants::r * Constants::deltat;
+                }
+                flowtime += current_makespan;
+                if (current_makespan > makespan)
+                    makespan = current_makespan;
+            }
+
+            // Create a JSON object to hold the data
+            nlohmann::json output;
+
+            // Add statistics data to the JSON object
+            output["cost"] = cost;
+            output["makespan"] = makespan;
+            output["flowtime"] = flowtime;
+            output["runtime"] = timer;
+            std::vector<std::vector<std::vector<double>>> paths;
+            std::cout<<"solution size="<<solution.size()<<std::endl;
+            // Add schedule data to the JSON object
+            for (size_t a = 0; a < solution.size(); ++a)
+            {
+                // nlohmann::json agentData;
+                std::vector<std::vector<double>> path;
+                for (const auto &state : solution[a].states)
+                {
+                    // nlohmann::json stateData;
+                    path.push_back({state.first.x, state.first.y, state.first.yaw});
+                    // stateData["x"] = state.first.x;
+                    // stateData["y"] = state.first.y;
+                    // stateData["yaw"] = state.first.yaw;
+                    // stateData["t"] = state.first.time;
+                    // agentData.push_back(stateData);
+                }
+                paths.push_back(path);
+                // output["schedule"]["agent" + std::to_string(a)] = agentData;
+            }
+            output["paths"] = paths;
+
+            // Save the JSON data to a file
+            std::ofstream file(outputFile);
+            if (file.is_open())
+            {
+                file << std::setw(4) << output << std::endl;
+                file.close();
+                std::cout << "JSON data saved successfully." << std::endl;
+            }
+            else
+            {
+                std::cerr << "Error opening file." << std::endl;
+            }
+
+            // std::cout << " Runtime: " << timer << std::endl
+            //           << " Makespan:" << makespan << std::endl
+            //           << " Flowtime:" << flowtime << std::endl
+            //           << " cost:" << cost << std::endl;
+            // // output to file
+            // out << "statistics:" << std::endl;
+            // out << "  cost: " << cost << std::endl;
+            // out << "  makespan: " << makespan << std::endl;
+            // out << "  flowtime: " << flowtime << std::endl;
+            // out << "  runtime: " << timer << std::endl;
+            // out << "schedule:" << std::endl;
+            // for (size_t a = 0; a < solution.size(); ++a)
+            // {
+            //     // std::cout << "Solution for: " << a << std::endl;
+            //     // for (size_t i = 0; i < solution[a].actions.size(); ++i) {
+            //     //   std::cout << solution[a].states[i].second << ": "
+            //     //             << solution[a].states[i].first << "->"
+            //     //             << solution[a].actions[i].first
+            //     //             << "(cost: " << solution[a].actions[i].second << ")"
+            //     //             << std::endl;
+            //     // }
+            //     // std::cout << solution[a].states.back().second << ": "
+            //     //           << solution[a].states.back().first << std::endl;
+
+            //     // check the
+
+            //     out << "  agent" << a << ":" << std::endl;
+            //     for (const auto &state : solution[a].states)
+            //     {
+            //         out << "    - x: " << state.first.x << std::endl
+            //             << "      y: " << state.first.y << std::endl
+            //             << "      yaw: " << state.first.yaw << std::endl
+            //             << "      t: " << state.first.time << std::endl;
+            //     }
+            // }
+        }
+        else
+        {
+            std::cout << "\033[1m\033[31m Fail to find paths \033[0m\n";
+        }
+    // }
+    // catch (std::exception &e)
+    // {
+    //     std::cerr << "\033[1m\033[31mERROR: Failed to load map file: " << inputFile
+    //               << "\033[0m \n";
+    //     return 0;
+    // }
+
     return 0;
 }

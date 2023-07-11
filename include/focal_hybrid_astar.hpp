@@ -40,7 +40,7 @@ namespace libMultiRobotPlanning
                 cameFrom;
 
             auto handle = openSet.push(Node(startState, Action(),
-                                            m_env.admissibleHeuristic(startState), 0,0));
+                                            m_env.admissibleHeuristic(startState), 0, 0));
 
             stateToHeap.insert(std::make_pair<>(m_env.calcIndex(startState), handle));
             (*handle).handle = handle;
@@ -73,9 +73,19 @@ namespace libMultiRobotPlanning
                         }
                     }
                 }
-
+                assert(focalSet.empty() == false);
+                std::cout<<"size of open"<<openSet.size()<<std::endl;
                 auto currentHandle = focalSet.top();
+                auto iter=openSet.begin();
+                for(;iter!=openSet.end();iter++){
+                    if(iter->handle==currentHandle) break;
+                }
+                if(iter==openSet.end()) {
+                    focalSet.pop();
+                    continue;
+                }
                 Node current = *currentHandle;
+                std::cout << current << std::endl;
                 m_env.onExpandNode(current.state, current.fScore, current.gScore);
 
                 // check if it is the solution
@@ -84,6 +94,7 @@ namespace libMultiRobotPlanning
                     solution.states.clear();
                     solution.actions.clear();
                     auto iter = cameFrom.find(m_env.getGoal());
+                    assert(iter != cameFrom.end());
                     solution.cost = std::get<3>(iter->second);
                     solution.fmin =
                         std::get<3>(iter->second) +
@@ -111,7 +122,13 @@ namespace libMultiRobotPlanning
                 }
 
                 focalSet.pop();
+                
+            
+
+           
                 openSet.erase(currentHandle);
+                std::cout << "open set ereased" << std::endl;
+
                 stateToHeap.erase(m_env.calcIndex(current.state));
                 closedSet.insert(m_env.calcIndex(current.state));
 
@@ -139,7 +156,7 @@ namespace libMultiRobotPlanning
                                                                current.gScore,
                                                                tentative_gScore);
                             auto handle = openSet.push(Node(neighbor.state, neighbor.action,
-                                                                 fScore, tentative_gScore, focalHeuristic));
+                                                            fScore, tentative_gScore, focalHeuristic));
                             (*handle).handle = handle;
                             if (fScore <= bestFScore * m_w)
                             {
@@ -174,11 +191,22 @@ namespace libMultiRobotPlanning
                             openSet.increase(handle);
                             m_env.onDiscover(neighbor.state, (*handle).fScore,
                                              (*handle).gScore);
+
                             if ((*handle).fScore <= bestFScore * m_w &&
                                 last_fScore > bestFScore * m_w)
                             {
-                                // std::cout << "focalAdd: " << *handle << std::endl;
-                                focalSet.push(handle);
+                                
+                                // auto iter = focalSet.begin();
+                                // for (; iter != focalSet.end(); iter++)
+                                // {
+                                //     if (*iter == handle)
+                                //         break;
+                                // }
+                                // if (iter == focalSet.end()){
+                                    focalSet.push(handle);
+                                    std::cout << "focalAdd: " << *handle << std::endl;
+                                // }
+                                    
                             }
                         }
 
@@ -216,11 +244,11 @@ namespace libMultiRobotPlanning
 #endif
         struct Node
         {
-           
+
             Node(const State &state, Action action, Cost fScore, Cost gScore, Cost focalHeuristic) : state(state), action(action),
-                                                                                           fScore(fScore),
-                                                                                           gScore(gScore),
-                                                                                           focalHeuristic(focalHeuristic) {}
+                                                                                                     fScore(fScore),
+                                                                                                     gScore(gScore),
+                                                                                                     focalHeuristic(focalHeuristic) {}
 
             friend std::ostream &operator<<(std::ostream &os, const Node &node)
             {
@@ -291,8 +319,6 @@ namespace libMultiRobotPlanning
                                          boost::heap::mutable_<true>>::handle_type
             handle;
 #endif
-
-
 
 #ifdef USE_FIBONACCI_HEAP
         // typedef typename boost::heap::fibonacci_heap<Node> openSet_t;
