@@ -44,6 +44,7 @@ set(ALL_SOURCE_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/include/planresult.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/include/timer.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/include/environment.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/pibt.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/sh_astar.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/cl_cbs.cpp
 
@@ -51,6 +52,7 @@ set(ALL_SOURCE_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/include/cl_ecbs.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/include/focal_hybrid_astar.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/cl_ecbs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/pibt.cpp
   
 )
 
