@@ -218,7 +218,6 @@ using Action = int; // int<7 int ==6 wait
 //     }
 //     return os;
 // }
-
 ///
 
 struct Conflict
