@@ -9,7 +9,10 @@
 #include <boost/numeric/ublas/matrix.hpp>
 
 using libMultiRobotPlanning::Neighbor;
+using libMultiRobotPlanning::OmplState;
 using libMultiRobotPlanning::PlanResult;
+using libMultiRobotPlanning::Point;
+using libMultiRobotPlanning::Segment;
 
 struct Location
 {
@@ -197,10 +200,6 @@ using Action = int; // int<7 int ==6 wait
 //     }
 // };
 
-
-
-
-
 class Environment
 {
 public:
@@ -210,7 +209,7 @@ public:
         : m_obstacles(std::move(obstacles)),
           m_dynamic_obstacles(std::move(dynamic_obstacles)),
           m_agentIdx(0),
-          m_constraints(nullptr),
+        //   m_constraints(nullptr),
           m_lastGoalConstraint(-1),
           m_highLevelExpanded(0),
           m_lowLevelExpanded(0)
@@ -240,13 +239,19 @@ public:
     Environment(const Environment &) = delete;
     Environment &operator=(const Environment &) = delete;
 
-
     // update the robot's goal
-    void setRobotGoal(size_t m_agentIdx, int gx,int gy, double yaw){
-        m_goals[m_agentIdx]=State(gx,gy,yaw);
+    void setRobotGoal(size_t agentIdx, int gx, int gy, double yaw)
+    {
+        m_goals[agentIdx] = State(gx, gy, yaw);
     }
 
-    double admissibleHeuristic(const State &s)
+
+    void setLowLevelContext(size_t agentIdx)
+    {   
+        m_agentIdx=agentIdx;
+    }
+
+    double admissibleHeuristic(const State &s,int agentIdx=0)
     {
         // non-holonomic-without-obstacles heuristic: use a Reeds-Shepp
         ompl::base::ReedsSheppStateSpace reedsSheppPath(Constants::r);
@@ -254,25 +259,25 @@ public:
         OmplState *rsEnd = (OmplState *)reedsSheppPath.allocState();
         rsStart->setXY(s.x, s.y);
         rsStart->setYaw(s.yaw);
-        rsEnd->setXY(m_goals[m_agentIdx].x, m_goals[m_agentIdx].y);
-        rsEnd->setYaw(m_goals[m_agentIdx].yaw);
+        rsEnd->setXY(m_goals[agentIdx].x, m_goals[agentIdx].y);
+        rsEnd->setYaw(m_goals[agentIdx].yaw);
         double reedsSheppCost = reedsSheppPath.distance(rsStart, rsEnd);
         // std::cout << "ReedsShepps cost:" << reedsSheppCost << std::endl;
         // Euclidean distance
-        double euclideanCost = sqrt(pow(m_goals[m_agentIdx].x - s.x, 2) +
-                                    pow(m_goals[m_agentIdx].y - s.y, 2));
+        double euclideanCost = sqrt(pow(m_goals[agentIdx].x - s.x, 2) +
+                                    pow(m_goals[agentIdx].y - s.y, 2));
         // std::cout << "Euclidean cost:" << euclideanCost << std::endl;
         // holonomic-with-obstacles heuristic
         double twoDoffset = sqrt(pow((s.x - static_cast<int>(s.x)) -
-                                         (m_goals[m_agentIdx].x -
-                                          static_cast<int>(m_goals[m_agentIdx].x)),
+                                         (m_goals[agentIdx].x -
+                                          static_cast<int>(m_goals[agentIdx].x)),
                                      2) +
                                  pow((s.y - static_cast<int>(s.y)) -
-                                         (m_goals[m_agentIdx].y -
-                                          static_cast<int>(m_goals[m_agentIdx].y)),
+                                         (m_goals[agentIdx].y -
+                                          static_cast<int>(m_goals[agentIdx].y)),
                                      2));
         double twoDCost =
-            holonomic_cost_maps[m_agentIdx]
+            holonomic_cost_maps[agentIdx]
                                [static_cast<int>(s.x / Constants::mapResolution)]
                                [static_cast<int>(s.y / Constants::mapResolution)] -
             twoDoffset;
@@ -282,9 +287,9 @@ public:
     }
 
 
-
-   
-   
+    size_t getNumAgents(){
+        return m_goals.size();
+    }
 
     bool isSolution(
         const State &state, double gscore,
@@ -438,7 +443,12 @@ public:
         {
             neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
         }
+
+
+        //analytic expansioned neighbor
+        addGoalToNeighborIfClose(s,action,neighbors);
     }
+
     State getGoal() { return m_goals[m_agentIdx]; }
     uint64_t calcIndex(const State &s)
     {
@@ -453,7 +463,6 @@ public:
                    (m_dimx / Constants::xyResolution) +
                (uint64_t)(s.x / Constants::xyResolution);
     }
-
 
     bool startAndGoalValid(const std::vector<State> &m_starts, const size_t iter,
                            const int batchsize)
@@ -479,6 +488,105 @@ public:
     }
 
 private:
+    void addGoalToNeighborIfClose(const State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors)
+    {
+        // check if the s is close enough to the goal state, if so, add the goal state to neighbors
+        double goal_distance = sqrt(pow(state.x - getGoal().x, 2) + pow(state.y - getGoal().y, 2));
+        if (goal_distance > 3* (Constants::LB + Constants::LF))
+            return;
+        ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
+        OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
+        OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
+        rsStart->setXY(state.x, state.y);
+        rsStart->setYaw(-state.yaw);
+        rsEnd->setXY(getGoal().x, getGoal().y);
+        rsEnd->setYaw(-getGoal().yaw);
+        ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath = reedsSheppSpace.reedsShepp(rsStart, rsEnd);
+        std::vector<State> path;
+        std::unordered_map<State, std::tuple<State, Action, double, double>, std::hash<State>> cameFrom;
+        cameFrom.clear();
+        path.emplace_back(state);
+        for (auto pathidx = 0; pathidx < 5; pathidx++)
+        {
+            if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
+                continue;
+            double deltat = 0, dx = 0, act = 0, cost = 0;
+            switch (reedsShepppath.type_[pathidx])
+            {
+            case 0: // RS_NOP
+                continue;
+                break;
+            case 1: // RS_LEFT
+                deltat = -reedsShepppath.length_[pathidx];
+                dx = Constants::r * sin(-deltat);
+                // dy = Constants::r * (1 - cos(-deltat));
+                act = 2;
+                cost = reedsShepppath.length_[pathidx] * Constants::r *
+                       Constants::penaltyTurning;
+                break;
+            case 2: // RS_STRAIGHT
+                deltat = 0;
+                dx = reedsShepppath.length_[pathidx] * Constants::r;
+                // dy = 0;
+                act = 0;
+                cost = dx;
+                break;
+            case 3: // RS_RIGHT
+                deltat = reedsShepppath.length_[pathidx];
+                dx = Constants::r * sin(deltat);
+                // dy = -Constants::r * (1 - cos(deltat));
+                act = 1;
+                cost = reedsShepppath.length_[pathidx] * Constants::r *
+                       Constants::penaltyTurning;
+                break;
+            default:
+                std::cout << "\033[1m\033[31m"
+                          << "Warning: Receive unknown ReedsSheppPath type"
+                          << "\033[0m\n";
+                break;
+            }
+            if (cost < 0)
+            {
+                cost = -cost * Constants::penaltyReversing;
+                act = act + 3;
+            }
+            State s = path.back();
+            auto candidate=getNextStateCloseToGoal(s,act,deltat,dx);
+            if(stateValid(candidate.first)){
+                neighbors.push_back(Neighbor<State,Action ,double>(candidate.first,act,candidate.second));
+            }
+            // if (generatePath(s, act, deltat, dx, next_path))
+            // {
+            //     for (auto iter = next_path.begin(); iter != next_path.end(); iter++)
+            //     {
+            //         State next_s = iter->first;
+            //         // gscore += iter->second;
+            //         if (!(next_s == path.back()))
+            //         {
+            //             cameFrom.insert(std::make_pair<>(
+            //                 next_s,
+            //                 std::make_tuple<>(path.back(), act, iter->second, gscore)));
+            //         }
+            //         path.emplace_back(next_s);
+            //     }
+            // }
+            // else
+            // {
+            //     return false;
+            // }
+        }
+
+        // if (path.back().time <= m_lastGoalConstraint)
+        // {
+        //     return false;
+        // }
+
+        // m_goals[m_agentIdx] = path.back();
+
+        // _camefrom.insert(cameFrom.begin(), cameFrom.end());
+        // return true;
+    }
+
     State getState(size_t agentIdx,
                    const std::vector<PlanResult<State, Action, double>> &solution,
                    size_t t)
@@ -517,12 +625,12 @@ private:
             if (s.agentCollision(it->second))
                 return false;
 
-        for (auto it = m_constraints->constraints.begin();
-             it != m_constraints->constraints.end(); it++)
-        {
-            if (!it->satisfyConstraint(s))
-                return false;
-        }
+        // for (auto it = m_constraints->constraints.begin();
+        //      it != m_constraints->constraints.end(); it++)
+        // {
+        //     if (!it->satisfyConstraint(s))
+        //         return false;
+        // }
 
         return true;
     }
@@ -598,6 +706,35 @@ private:
         //     std::cout << std::endl;
         //   }
         // }
+    }
+
+    std::pair<State,double> getNextStateCloseToGoal(State startState, int act, double deltaSteer, double deltaLength)
+    {
+        double xSucc, ySucc, yawSucc, dx, dy, dyaw, ratio;
+        if (act == 0 || act == 3)
+        {
+            double L = std::min(Constants::dx[act], deltaLength);
+            State s = startState;
+            xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
+                    Constants::dy[act] * sin(-s.yaw);
+            ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
+                    Constants::dy[act] * cos(-s.yaw);
+            yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
+            State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
+            return {nextState,L};
+        }
+        else
+        {
+            double dyaw = std::min(Constants::dyaw[act], deltaSteer);
+            State s = startState;
+            xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
+                    Constants::dy[act] * sin(-s.yaw);
+            ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
+                    Constants::dy[act] * cos(-s.yaw);
+            yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
+            State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
+            return {nextState,Constants::r*dyaw*Constants::penaltyTurning};
+        }
     }
 
     bool generatePath(State startState, int act, double deltaSteer,
@@ -686,8 +823,14 @@ private:
     // std::vector< std::vector<int> > m_heuristic;
     std::vector<double> m_vel_limit;
     size_t m_agentIdx;
-    const Constraints *m_constraints;
+    // const Constraints *m_constraints;
     int m_lastGoalConstraint;
     int m_highLevelExpanded;
     int m_lowLevelExpanded;
 };
+
+int main()
+{
+
+    return 0;
+}

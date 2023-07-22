@@ -123,6 +123,16 @@ target_link_libraries(CL-ECBS
 )
 
 
+## pibt
+add_executable(PIBT
+  src/pibt.cpp
+)
+target_link_libraries(PIBT
+  ${OMPL_LIBRARIES}
+  yaml-cpp
+)
+
+
 ## test CL-CBS
 # add_executable(test
 #   test/test_CLCBS.cpp
