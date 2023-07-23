@@ -14,6 +14,7 @@ using libMultiRobotPlanning::OmplState;
 using libMultiRobotPlanning::PlanResult;
 using libMultiRobotPlanning::Point;
 using libMultiRobotPlanning::Segment;
+using libMultiRobotPlanning::PIBT;
 
 struct Location
 {
@@ -205,10 +206,8 @@ class Environment
 {
 public:
     Environment(size_t maxx, size_t maxy, std::unordered_set<Location> obstacles,
-                std::multimap<int, State> dynamic_obstacles,
                 std::vector<State> goals)
         : m_obstacles(std::move(obstacles)),
-          m_dynamic_obstacles(std::move(dynamic_obstacles)),
           m_agentIdx(0),
           //   m_constraints(nullptr),
           m_lastGoalConstraint(-1),
@@ -831,7 +830,7 @@ private:
     int m_lowLevelExpanded;
 };
 
-void readMapsFromYaml(std::string inputFile, int &dimx, int &dimy,
+void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
                       std::vector<State> &startStates,
                       std::vector<State> &goals,
                       std::unordered_set<Location> &obstacles)
@@ -849,9 +848,10 @@ void readMapsFromYaml(std::string inputFile, int &dimx, int &dimy,
         exit(0);
     }
     const auto &dim = map_config["map"]["dimensions"];
-    dimx = dim[0].as<int>();
-    dimy = dim[1].as<int>();
+    dimx = dim[0].as<size_t>();
+    dimy = dim[1].as<size_t>();
 
+    std::cout<<"dimx="<<dimx<<"      dimy="<<dimy<<std::endl;
     for (const auto &node : map_config["map"]["obstacles"])
     {
         obstacles.insert(Location(node[0].as<double>(), node[1].as<double>()));
@@ -981,8 +981,55 @@ void dumpOutputToJson(std::string outputFile,
     }
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+
+    namespace po = boost::program_options;
+    // Declare the supported options.
+    po::options_description desc("Allowed options");
+    std::string inputFile;
+    std::string outputFile;
+    desc.add_options()("help", "produce help message")(
+        "input,i", po::value<std::string>(&inputFile)->required(),
+        "input file (YAML)")("output,o",
+                             po::value<std::string>(&outputFile)->required(),
+                             "output file (YAML)");
+
+    try
+    {
+        po::variables_map vm;
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        po::notify(vm);
+
+        if (vm.count("help") != 0u)
+        {
+            std::cout << desc << "\n";
+            return 0;
+        }
+    }
+    catch (po::error &e)
+    {
+        std::cerr << e.what() << std::endl
+                  << std::endl;
+        std::cerr << desc << std::endl;
+        return 1;
+    }
+
+    size_t dimx,dimy;
+    std::unordered_set<Location> obstacles;
+    // std::multimap<int, State> dynamic_obstacles;
+    std::vector<State> goals;
+    std::vector<State> startStates;
+    readMapsFromYaml(inputFile,dimx,dimy,startStates,goals,obstacles);
+    Environment mapf(dimx, dimy, obstacles, goals);
+
+    std::vector<PlanResult<State,Action,double>>solution;
+    bool success=false;
+    Timer iterTimer;
+    PIBT<State,Action,double,Environment> pibt(mapf,startStates);
+    pibt.PIBT_solve();
+
+ 
 
     return 0;
 }

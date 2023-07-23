@@ -5,6 +5,7 @@
 #include <vector>
 #include <queue>
 #include <set>
+#include <unordered_set>
 #include "neighbor.hpp"
 #include "planresult.hpp"
 #include <functional>
@@ -19,7 +20,7 @@ namespace libMultiRobotPlanning
     private:
         Environment &m_env;
         std::vector<PlanResult<State, Action, Cost>> solution;
-        std::set<State> occupied;
+        std::unordered_set<State> occupied;
         std::vector<size_t> undecided;
 
         std::vector<State> currentStates;
@@ -36,6 +37,7 @@ namespace libMultiRobotPlanning
         void update_priorities()
         {
             agents_list.clear();
+            distance_heuristic=std::vector<double>(m_env.getNumAgents(),0);
             for (size_t i = 0; i < m_env.getNumAgents(); i++)
             {
                 agents_list.push_back(i);
@@ -52,7 +54,16 @@ namespace libMultiRobotPlanning
             };
 
             std::sort(agents_list.begin(), agents_list.end(), comparator);
+
+
+            // debug agent list
+            // for(auto agent:agents_list){
+            //     std::cout<<agent<<"  ";
+            // }
+            // std::cout<<std::endl;
         }
+
+   
 
         bool arrivedGoals(){
             for(int i=0;i<m_env.getNumAgents();i++){
@@ -82,6 +93,7 @@ namespace libMultiRobotPlanning
             nextPlan = currentStates;
             lastActions = std::vector<Action>(num_agents, 0);
             lastGoalReleasedTime = std::vector<int>(num_agents, 0);
+            solution=std::vector<PlanResult<State,Action,Cost>>(num_agents,PlanResult<State,Action,Cost>());
             update_priorities();
         }
 
@@ -91,11 +103,12 @@ namespace libMultiRobotPlanning
             currentStates[agent] = state;
         }
 
-        void PUBT_solve()
+        void PIBT_solve()
         {
             time_steps = 0;
             while (time_steps <= max_timesteps)
-            {
+            {   
+                std::cout<<"current time step="<<time_steps<<std::endl;
                 time_steps++;
                 PIBT_loop();
                 if (arrivedGoals() == true)
@@ -115,7 +128,12 @@ namespace libMultiRobotPlanning
                 int agent = undecided[0];
                 PIBT_func(agent);
             }
+
+            //update
+            currentStates=nextPlan;
         }
+
+        
 
         bool PIBT_func(int agent, int parent_agent = -1)
         {
@@ -130,7 +148,9 @@ namespace libMultiRobotPlanning
             {
 
                 auto next = nbr.state;
-                if (agent != -1 and currentStates[parent_agent].agentCollision(next) == true)
+
+                //avoid colliding with parent agents
+                if (parent_agent != -1 and currentStates[parent_agent].agentCollision(next) == true)
                     continue;
                 bool valid = true;
                 for (auto ak : undecided)
@@ -148,6 +168,10 @@ namespace libMultiRobotPlanning
                 if (valid)
                 {
                     nextPlan[agent] = next;
+                    solution[agent].states.push_back({next,nbr.cost});
+                    solution[agent].actions.push_back({nbr.action,nbr.cost});
+                    solution[agent].cost+=nbr.cost;
+                    lastActions[agent]=nbr.action;
                     occupied.insert(next);
                     return true;
                 }
@@ -155,6 +179,6 @@ namespace libMultiRobotPlanning
             return false;
         }
 
-        ~PIBT();
+       
     };
 }
