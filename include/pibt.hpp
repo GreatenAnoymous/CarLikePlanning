@@ -10,6 +10,7 @@
 #include "planresult.hpp"
 #include <functional>
 #include <algorithm>
+#include <cassert>
 #include <iostream>
 namespace libMultiRobotPlanning
 {
@@ -80,8 +81,9 @@ namespace libMultiRobotPlanning
         void sortNeighbors(std::vector<Neighbor<State, Action, double>> &neighbors,int agent)
         {
             auto comparator=[&](Neighbor<State, Action, double>&a, Neighbor<State, Action, double>&b){
-                return m_env.admissibleHeuristic(a,agent)>m_env.admissibleHeuristic(b,agent);
+                return m_env.admissibleHeuristic(a.state,agent)>m_env.admissibleHeuristic(b.state,agent);
             };
+            std::sort(neighbors.begin(),neighbors.end(),comparator);
         }
 
         /* data */
@@ -111,11 +113,13 @@ namespace libMultiRobotPlanning
                 std::cout<<"current time step="<<time_steps<<std::endl;
                 time_steps++;
                 PIBT_loop();
+                std::cout<<"current state="<<currentStates[0]<<"  goal state= "<<m_env.getGoal(0)<<std::endl;
                 if (arrivedGoals() == true)
                 {
                     std::cout << "All robots have arrived the goal states" << std::endl;
                     break;
                 }
+                std::cout<<"==================="<<std::endl;
             }
         }
         void PIBT_loop()
@@ -137,32 +141,52 @@ namespace libMultiRobotPlanning
 
         bool PIBT_func(int agent, int parent_agent = -1)
         {
+            
+            std::cout<<"PIBT calls to agent "<<agent<<std::endl;
+            if(std::find(undecided.begin(),undecided.end(),agent)==undecided.end()){
+                std::cout<<"agent "<<agent<<" not in undecided"<<std::endl;
+                for(auto agent :undecided){
+                    std::cout<<agent<<"  ";
+                }
+                std::cout<<std::endl;
+            }
 
+            assert(std::find(undecided.begin(),undecided.end(),agent)!=undecided.end());
             undecided.erase(std::remove(undecided.begin(), undecided.end(), agent));
             std::vector<Neighbor<State, Action, double>> neighbors;
             m_env.getNeighbors(currentStates[agent], lastActions[agent], neighbors);
 
             // to do: sort neighbors based on distance heuristic
-
+            
+            sortNeighbors(neighbors,agent);
+            for(auto nbr:neighbors){
+                std::cout<<"nbr "<<nbr.state<<"  ";
+            }
+            std::cout<<std::endl;
             for (auto nbr : neighbors)
             {
 
                 auto next = nbr.state;
 
                 //avoid colliding with parent agents
-                if (parent_agent != -1 and currentStates[parent_agent].agentCollision(next) == true)
+                if (parent_agent != -1 and currentStates[parent_agent].agentCollision(next) == true){
+                    std::cout<<"avoid collision with parent agent "<<parent_agent<<std::endl;
                     continue;
+                }
                 bool valid = true;
-                for (auto ak : undecided)
+                for (size_t k=0;k<undecided.size();)
                 {
+                    int ak=undecided[k];
                     auto sk = currentStates[ak];
                     if (sk.agentCollision(next))
-                    {
-                        if (PIBT_func((ak, agent)) == false)
+                    {                                          
+                        if (PIBT_func(ak, agent) == false)
                         {
                             valid = false;
                             break;
                         }
+                    }else{
+                        k++;
                     }
                 }
                 if (valid)
