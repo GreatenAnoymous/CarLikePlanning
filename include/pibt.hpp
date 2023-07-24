@@ -51,7 +51,7 @@ namespace libMultiRobotPlanning
                 {
                     return ((time_steps - lastGoalReleasedTime[ai]) > (time_steps - lastGoalReleasedTime[aj]));
                 }
-                return distance_heuristic[ai] > distance_heuristic[aj];
+                return distance_heuristic[ai] < distance_heuristic[aj];
             };
 
             std::sort(agents_list.begin(), agents_list.end(), comparator);
@@ -81,7 +81,7 @@ namespace libMultiRobotPlanning
         void sortNeighbors(std::vector<Neighbor<State, Action, double>> &neighbors,int agent)
         {
             auto comparator=[&](Neighbor<State, Action, double>&a, Neighbor<State, Action, double>&b){
-                return m_env.admissibleHeuristic(a.state,agent)>m_env.admissibleHeuristic(b.state,agent);
+                return m_env.admissibleHeuristic(a.state,agent)<m_env.admissibleHeuristic(b.state,agent);
             };
             std::sort(neighbors.begin(),neighbors.end(),comparator);
         }
@@ -139,6 +139,10 @@ namespace libMultiRobotPlanning
 
         
 
+        std::vector<PlanResult<State, Action, Cost>> getSolution(){
+            return solution;
+        }
+
         bool PIBT_func(int agent, int parent_agent = -1)
         {
             
@@ -154,13 +158,13 @@ namespace libMultiRobotPlanning
             assert(std::find(undecided.begin(),undecided.end(),agent)!=undecided.end());
             undecided.erase(std::remove(undecided.begin(), undecided.end(), agent));
             std::vector<Neighbor<State, Action, double>> neighbors;
-            m_env.getNeighbors(currentStates[agent], lastActions[agent], neighbors);
+            m_env.getNeighbors(currentStates[agent], lastActions[agent], neighbors,agent);
 
             // to do: sort neighbors based on distance heuristic
             
-            sortNeighbors(neighbors,agent);
+            // sortNeighbors(neighbors,agent);
             for(auto nbr:neighbors){
-                std::cout<<"nbr "<<nbr.state<<"  ";
+                std::cout<<"nbr "<<nbr.state<<"  "<<m_env.admissibleHeuristic(nbr.state,agent)<<std::endl;
             }
             std::cout<<std::endl;
             for (auto nbr : neighbors)

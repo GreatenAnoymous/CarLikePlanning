@@ -11,7 +11,7 @@ import numpy as np
 import yaml
 import json
 import matplotlib
-matplotlib.use("Qt5Agg")
+# matplotlib.use("Qt5Agg")
 
 PLOTLINE = True  # True
 
@@ -95,7 +95,7 @@ class Animation:
         for d, i in zip(map["agents"], range(0, len(map["agents"]))):
             name = d["name"]
             self.agents[name] = Rectangle(
-                (d["start"][0], d["start"][1]), 1, 2, 0.0, edgecolor='black', alpha=0.7)
+                (d["start"][0], d["start"][1]), width=(lb+lf), height=carWidth, angle=0.0, edgecolor='black', alpha=0.7)
             self.agents[name].original_face_color = cmap(i+1)
             self.patches.append(self.agents[name])
             self.T = max(self.T, schedule["schedule"][name][-1]["t"])
@@ -239,5 +239,5 @@ if __name__ == "__main__":
         matplotlib.use("Agg")
         animation.save(args.video, args.speed)
     else:
-        matplotlib.use("Qt5Agg")
+        # matplotlib.use("Qt5Agg")
         animation.show()

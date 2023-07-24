@@ -257,9 +257,9 @@ public:
         OmplState *rsStart = (OmplState *)reedsSheppPath.allocState();
         OmplState *rsEnd = (OmplState *)reedsSheppPath.allocState();
         rsStart->setXY(s.x, s.y);
-        rsStart->setYaw(s.yaw);
+        rsStart->setYaw(-s.yaw);
         rsEnd->setXY(m_goals[agentIdx].x, m_goals[agentIdx].y);
-        rsEnd->setYaw(m_goals[agentIdx].yaw);
+        rsEnd->setYaw(-m_goals[agentIdx].yaw);
         double reedsSheppCost = reedsSheppPath.distance(rsStart, rsEnd);
         // std::cout << "ReedsShepps cost:" << reedsSheppCost << std::endl;
         // Euclidean distance
@@ -393,11 +393,13 @@ public:
         return true;
     }
 
-    void getNeighbors(const State &s, Action action,
-                      std::vector<Neighbor<State, Action, double>> &neighbors)
+    void getNeighbors( State &s, Action action,
+                      std::vector<Neighbor<State, Action, double>> &neighbors,int agent=-1)
     {
+        
         neighbors.clear();
         double g = Constants::dx[0];
+        std::cout<<"current state="<<s<<std::endl;
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
             double xSucc, ySucc, yawSucc;
@@ -434,6 +436,10 @@ public:
                 neighbors.emplace_back(
                     Neighbor<State, Action, double>(tempState, act, g));
             }
+            else{
+                std::cout<<"This neighbor is not valid!"<<std::endl;
+            }
+            
         }
         // wait
         g = Constants::dx[0];
@@ -442,9 +448,18 @@ public:
         {
             neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
         }
-
+        
+        if(agent!=-1){
+             auto comparator=[&](Neighbor<State, Action, double>&a, Neighbor<State, Action, double>&b){
+                return admissibleHeuristic(a.state,agent)<admissibleHeuristic(b.state,agent);
+            };
+            std::sort(neighbors.begin(),neighbors.end(),comparator);
+        }
+       
+        addGoalToNeighborIfClose(s, action, neighbors,agent);
+        
         // analytic expansioned neighbor
-        addGoalToNeighborIfClose(s, action, neighbors);
+        
     }
 
     State getGoal() { return m_goals[m_agentIdx]; }
@@ -488,10 +503,10 @@ public:
     }
 
 private:
-    void addGoalToNeighborIfClose(const State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors)
+    void addGoalToNeighborIfClose( State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors,int agent)
     {
         // check if the s is close enough to the goal state, if so, add the goal state to neighbors
-        double goal_distance = sqrt(pow(state.x - getGoal().x, 2) + pow(state.y - getGoal().y, 2));
+        double goal_distance = sqrt(pow(state.x - getGoal(agent).x, 2) + pow(state.y - getGoal(agent).y, 2));
         if (goal_distance > 3 * (Constants::LB + Constants::LF))
             return;
         ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
@@ -499,13 +514,12 @@ private:
         OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
         rsStart->setXY(state.x, state.y);
         rsStart->setYaw(-state.yaw);
-        rsEnd->setXY(getGoal().x, getGoal().y);
-        rsEnd->setYaw(-getGoal().yaw);
+        rsEnd->setXY(getGoal(agent).x, getGoal(agent).y);
+        rsEnd->setYaw(-getGoal(agent).yaw);
         ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath = reedsSheppSpace.reedsShepp(rsStart, rsEnd);
         std::vector<State> path;
-        std::unordered_map<State, std::tuple<State, Action, double, double>, std::hash<State>> cameFrom;
-        cameFrom.clear();
-        path.emplace_back(state);
+        auto goal=getGoal(agent);
+
         for (auto pathidx = 0; pathidx < 5; pathidx++)
         {
             if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
@@ -550,33 +564,21 @@ private:
                 cost = -cost * Constants::penaltyReversing;
                 act = act + 3;
             }
-            State s = path.back();
-            auto candidate = getNextStateCloseToGoal(s, act, deltat, dx);
+            
+            auto candidate = getNextStateCloseToGoal(state, act, deltat, dx);
             if (stateValid(candidate.first))
             {
-                neighbors.push_back(Neighbor<State, Action, double>(candidate.first, act, candidate.second));
+                std::cout<<"reeds-shepp  state is"<<candidate.first<<std::endl;
+                // neighbors.push_back(Neighbor<State, Action, double>(candidate.first, act, candidate.second));
+                neighbors.insert(neighbors.begin(),Neighbor<State, Action, double>(candidate.first, act, candidate.second));
+                break;
             }
-            // if (generatePath(s, act, deltat, dx, next_path))
-            // {
-            //     for (auto iter = next_path.begin(); iter != next_path.end(); iter++)
-            //     {
-            //         State next_s = iter->first;
-            //         // gscore += iter->second;
-            //         if (!(next_s == path.back()))
-            //         {
-            //             cameFrom.insert(std::make_pair<>(
-            //                 next_s,
-            //                 std::make_tuple<>(path.back(), act, iter->second, gscore)));
-            //         }
-            //         path.emplace_back(next_s);
-            //     }
-            // }
-            // else
-            // {
-            //     return false;
-            // }
+            else{
+                std::cout<<"This neighbor is not valid!"<<std::endl;
+            }
+ 
         }
-
+        // findReedsSheppPath(state,goal,path);
         // if (path.back().time <= m_lastGoalConstraint)
         // {
         //     return false;
@@ -634,6 +636,98 @@ private:
         // }
 
         return true;
+    }
+
+    void singleAgentPath(State &start,State &goal,std::vector<State> &path){
+        std::cout<<"Not implemented"<<std::endl;
+        
+        return;
+    }
+
+
+    void findReedsSheppPath(State &start, State &goal,std::vector<State>&path){
+        ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
+        OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
+        OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
+        std::cout<<"reeds shepp find path"<<start<<"  "<<goal<<std::endl;
+        rsStart->setXY(start.x, start.y);
+        rsStart->setYaw(-start.yaw);
+        rsEnd->setXY(goal.x, goal.y);
+        rsEnd->setYaw(-goal.yaw);
+        ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
+            reedsSheppSpace.reedsShepp(rsStart, rsEnd);
+        path.push_back(start);
+  
+        for (auto pathidx = 0; pathidx < 5; pathidx++)
+        {
+            if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
+                continue;
+            double deltat = 0, dx = 0, act = 0, cost = 0;
+            switch (reedsShepppath.type_[pathidx])
+            {
+            case 0: // RS_NOP
+                continue;
+                break;
+            case 1: // RS_LEFT
+                deltat = -reedsShepppath.length_[pathidx];
+                dx = Constants::r * sin(-deltat);
+                // dy = Constants::r * (1 - cos(-deltat));
+                act = 2;
+                cost = reedsShepppath.length_[pathidx] * Constants::r *
+                       Constants::penaltyTurning;
+                break;
+            case 2: // RS_STRAIGHT
+                deltat = 0;
+                dx = reedsShepppath.length_[pathidx] * Constants::r;
+                // dy = 0;
+                act = 0;
+                cost = dx;
+                break;
+            case 3: // RS_RIGHT
+                deltat = reedsShepppath.length_[pathidx];
+                dx = Constants::r * sin(deltat);
+                // dy = -Constants::r * (1 - cos(deltat));
+                act = 1;
+                cost = reedsShepppath.length_[pathidx] * Constants::r *
+                       Constants::penaltyTurning;
+                break;
+            default:
+                std::cout << "\033[1m\033[31m"
+                          << "Warning: Receive unknown ReedsSheppPath type"
+                          << "\033[0m\n";
+                break;
+            }
+            if (cost < 0)
+            {
+                cost = -cost * Constants::penaltyReversing;
+                act = act + 3;
+            }
+            State s = path.back();
+            std::vector<std::pair<State, double>> next_path;
+            if (generatePath(s, act, deltat, dx, next_path))
+            {
+                for (auto iter = next_path.begin()+1; iter != next_path.end(); iter++)
+                {
+                    State next_s = iter->first;
+                    // gscore += iter->second;
+                    // if (!(next_s == path.back()))
+                    // {
+                    //     cameFrom.insert(std::make_pair<>(
+                    //         next_s,
+                    //         std::make_tuple<>(path.back(), act, iter->second, gscore)));
+                    // }
+                    path.emplace_back(next_s);
+                }
+            }
+        }
+
+        //print
+        std::cout<<"print reeds shepp path  "<<path.size()<<std::endl;
+        for(auto &state:path){
+            std::cout<<state<<"   ";
+        }
+        std::cout<<std::endl;
+        
     }
 
 private:
@@ -711,31 +805,56 @@ private:
 
     std::pair<State, double> getNextStateCloseToGoal(State startState, int act, double deltaSteer, double deltaLength)
     {
-        double xSucc, ySucc, yawSucc;
+        double xSucc, ySucc, yawSucc,dx,dy,dyaw;
         if (act == 0 || act == 3)
         {
-            double L = std::min(Constants::dx[act], deltaLength);
-            State s = startState;
-            xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
-                    Constants::dy[act] * sin(-s.yaw);
-            ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
-                    Constants::dy[act] * cos(-s.yaw);
-            yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
-            State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
-            return {nextState, L};
+            // double L = std::min(Constants::dx[act], deltaLength);
+            if(Constants::dx[act]<deltaLength){
+                State s = startState;
+                xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
+                        Constants::dy[act] * sin(-s.yaw);
+                ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
+                        Constants::dy[act] * cos(-s.yaw);
+                yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
+                State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
+                return {nextState, Constants::dx[act]};
+            }
+            else{
+                dyaw=0;
+                dx=deltaLength;
+                dy=0;
+            }
+            
         }
         else
         {
-            double dyaw = std::min(Constants::dyaw[act], deltaSteer);
-            State s = startState;
-            xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
-                    Constants::dy[act] * sin(-s.yaw);
-            ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
-                    Constants::dy[act] * cos(-s.yaw);
-            yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
-            State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
-            return {nextState, Constants::r * dyaw * Constants::penaltyTurning};
+            if(Constants::dyaw[act]<deltaSteer){
+                double dyaw = std::min(Constants::dyaw[act], deltaSteer);
+                State s = startState;
+                xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
+                        Constants::dy[act] * sin(-s.yaw);
+                ySucc = s.y + Constants::dx[act] * sin(-s.yaw) +
+                        Constants::dy[act] * cos(-s.yaw);
+                yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
+                State nextState(xSucc, ySucc, yawSucc, s.time + 1);
+                return {nextState, Constants::dx[0]* Constants::penaltyTurning};
+            }
+            else{
+                dyaw=deltaSteer;
+                dx=Constants::r*sin(dyaw);
+                dy=-Constants::r*(1-cos(dyaw));
+                if(act==2||act==5){
+                    dx=-dx;
+                    dy=-dy;
+                }
+            }
         }
+        State s = startState;
+        xSucc = s.x + dx * cos(-s.yaw) - dy * sin(-s.yaw);
+        ySucc = s.y + dx * sin(-s.yaw) + dy * cos(-s.yaw);
+        yawSucc = Constants::normalizeHeadingRad(s.yaw + dyaw);
+        State nextState(xSucc, ySucc, yawSucc, s.time + 1);
+        return {nextState,sqrt(dx*dx+dy*dy)};
     }
 
     bool generatePath(State startState, int act, double deltaSteer,
@@ -1028,7 +1147,8 @@ int main(int argc, char *argv[])
     Timer iterTimer;
     PIBT<State,Action,double,Environment> pibt(mapf,startStates);
     pibt.PIBT_solve();
-
+    solution=pibt.getSolution();
+    dumpOutputToYaml(outputFile,solution,0);
  
 
     return 0;
