@@ -39,11 +39,10 @@ namespace libMultiRobotPlanning
         void update_priorities()
         {
             agents_list.clear();
-            distance_heuristic = std::vector<double>(m_env.getNumAgents(), 0);
+            // distance_heuristic = std::vector<double>(m_env.getNumAgents(), 0);
             for (size_t i = 0; i < m_env.getNumAgents(); i++)
             {
                 agents_list.push_back(i);
-                // distance_heuristic[i] = m_env.admissibleHeuristic(currentStates[i], i);
             }
 
             sort_list(agents_list);
@@ -56,11 +55,12 @@ namespace libMultiRobotPlanning
             std::cout << std::endl;
         }
 
-        void sort_list(std::vector<size_t>&list)
+        void sort_list(std::vector<size_t> &list)
         {
-            for(auto k: list){
-                distance_heuristic[k] = m_env.admissibleHeuristic(currentStates[k], k);
-            }
+            // for (auto k : list)
+            // {
+            //     distance_heuristic[k] = m_env.admissibleHeuristic(currentStates[k], k);
+            // }
             auto comparator = [&](size_t ai, size_t aj)
             {
                 if ((time_steps - lastGoalReleasedTime[ai]) != (time_steps - lastGoalReleasedTime[aj]))
@@ -94,15 +94,15 @@ namespace libMultiRobotPlanning
             {
                 auto goal = m_env.getGoal(i);
                 auto curr = currentStates[i];
-                // if(fabs(goal.x!=curr.x) or (goal.y!=curr.y) or (goal.yaw!=curr.yaw)){
-                //     return false;
-                // }
+    
                 auto dyaw = pow(cos(goal.yaw) - cos(curr.yaw), 2) + pow(sin(goal.yaw) - sin(curr.yaw), 2);
                 auto dist = sqrt(pow(goal.x - curr.x, 2) + pow(goal.y - curr.y, 2) + dyaw);
                 if (dist > 1e-1)
                     flag = false;
-                else
+                else{
+                    distance_heuristic[i]=0;
                     lastGoalReleasedTime[i] = time_steps;
+                }
             }
             return flag;
         }
@@ -125,6 +125,11 @@ namespace libMultiRobotPlanning
             nextPlan = currentStates;
             lastActions = std::vector<Action>(num_agents, 6);
             lastGoalReleasedTime = std::vector<int>(num_agents, 0);
+            distance_heuristic = std::vector<double>(num_agents, 0);
+            for (int i = 0; i < num_agents; i++)
+            {
+                distance_heuristic[i] = m_env.admissibleHeuristic(initialStates[i],i);
+            }
             solution = std::vector<PlanResult<State, Action, Cost>>(num_agents, PlanResult<State, Action, Cost>());
             update_priorities();
         }

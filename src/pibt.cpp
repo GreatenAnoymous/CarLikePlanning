@@ -399,7 +399,7 @@ public:
 
         neighbors.clear();
         double g = Constants::dx[0];
-        std::cout << "current state=" << s << std::endl;
+        std::cout << "current state of agent "<<agent<<"=" << s <<"  goal state="<<getGoal(agent) << std::endl;
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
             double xSucc, ySucc, yawSucc;
