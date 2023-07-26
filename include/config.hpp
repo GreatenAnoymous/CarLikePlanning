@@ -31,6 +31,10 @@ namespace Constants
     // [#] --- A movement cost penalty for change of direction (changing from
     // primitives < 3 to primitives > 2)
     static float penaltyCOD = 2.0;
+
+    static float oneStepWeight=0.3;
+    //
+    static float penaltyWait=6.0;
     // map resolution
     static float mapResolution = 2.0;
     // change to set calcIndex resolution

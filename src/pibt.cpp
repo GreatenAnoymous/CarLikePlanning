@@ -11,10 +11,10 @@
 
 using libMultiRobotPlanning::Neighbor;
 using libMultiRobotPlanning::OmplState;
+using libMultiRobotPlanning::PIBT;
 using libMultiRobotPlanning::PlanResult;
 using libMultiRobotPlanning::Point;
 using libMultiRobotPlanning::Segment;
-using libMultiRobotPlanning::PIBT;
 
 struct Location
 {
@@ -55,7 +55,7 @@ namespace std
 
 struct State
 {
-    State(double x, double y, double yaw, int time = 0)
+    State(double x = 0, double y = 0, double yaw = 0, int time = 0)
         : time(time), x(x), y(y), yaw(yaw)
     {
         rot.resize(2, 2);
@@ -393,13 +393,13 @@ public:
         return true;
     }
 
-    void getNeighbors( State &s, Action action,
-                      std::vector<Neighbor<State, Action, double>> &neighbors,int agent=-1)
+    void getNeighbors(State &s, Action action,
+                      std::vector<Neighbor<State, Action, double>> &neighbors, int agent = -1)
     {
-        
+
         neighbors.clear();
         double g = Constants::dx[0];
-        std::cout<<"current state="<<s<<std::endl;
+        std::cout << "current state=" << s << std::endl;
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
             double xSucc, ySucc, yawSucc;
@@ -433,33 +433,41 @@ public:
             State tempState(xSucc, ySucc, yawSucc, s.time + 1);
             if (stateValid(tempState))
             {
+
                 neighbors.emplace_back(
                     Neighbor<State, Action, double>(tempState, act, g));
             }
-            else{
-                std::cout<<"This neighbor is not valid!"<<std::endl;
+            else
+            {
+                std::cout << "This neighbor is not valid!" << std::endl;
             }
-            
         }
         // wait
         g = Constants::dx[0];
+
         State tempState(s.x, s.y, s.yaw, s.time + 1);
         if (stateValid(tempState))
         {
+            if (arrivedGoal(tempState, agent) == false)
+            {
+                g = g * Constants::penaltyWait;
+                std::cout << " penalty to wait  g=" << g << " penalty=" << Constants::penaltyWait << std::endl;
+            }
             neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
         }
-        
-        if(agent!=-1){
-             auto comparator=[&](Neighbor<State, Action, double>&a, Neighbor<State, Action, double>&b){
-                return admissibleHeuristic(a.state,agent)<admissibleHeuristic(b.state,agent);
+
+        if (agent != -1)
+        {
+            auto comparator = [&](Neighbor<State, Action, double> &a, Neighbor<State, Action, double> &b)
+            {
+                return admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost < admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost;
             };
-            std::sort(neighbors.begin(),neighbors.end(),comparator);
+            std::sort(neighbors.begin(), neighbors.end(), comparator);
         }
-       
-        addGoalToNeighborIfClose(s, action, neighbors,agent);
-        
+
+        addGoalToNeighborIfClose(s, action, neighbors, agent);
+
         // analytic expansioned neighbor
-        
     }
 
     State getGoal() { return m_goals[m_agentIdx]; }
@@ -503,10 +511,11 @@ public:
     }
 
 private:
-    void addGoalToNeighborIfClose( State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors,int agent)
+    void addGoalToNeighborIfClose(State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors, int agent)
     {
         // check if the s is close enough to the goal state, if so, add the goal state to neighbors
         double goal_distance = sqrt(pow(state.x - getGoal(agent).x, 2) + pow(state.y - getGoal(agent).y, 2));
+
         if (goal_distance > 3 * (Constants::LB + Constants::LF))
             return;
         ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
@@ -518,7 +527,7 @@ private:
         rsEnd->setYaw(-getGoal(agent).yaw);
         ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath = reedsSheppSpace.reedsShepp(rsStart, rsEnd);
         std::vector<State> path;
-        auto goal=getGoal(agent);
+        auto goal = getGoal(agent);
 
         for (auto pathidx = 0; pathidx < 5; pathidx++)
         {
@@ -564,19 +573,27 @@ private:
                 cost = -cost * Constants::penaltyReversing;
                 act = act + 3;
             }
-            
+
             auto candidate = getNextStateCloseToGoal(state, act, deltat, dx);
             if (stateValid(candidate.first))
             {
-                std::cout<<"reeds-shepp  state is"<<candidate.first<<std::endl;
+                auto dyaw = pow(cos(getGoal(agent).yaw) - cos(candidate.first.yaw), 2) + pow(sin(getGoal(agent).yaw) - sin(candidate.first.yaw), 2);
+                double dist = sqrt(pow(candidate.first.x - getGoal(agent).x, 2) + pow(candidate.first.y - getGoal(agent).y, 2) + dyaw);
+                if (dist < 1e-1)
+                {
+                    candidate.first = getGoal(agent);
+
+                    candidate.first.time = state.time + 1;
+                }
+                std::cout << "reeds-shepp  state is" << candidate.first << std::endl;
                 // neighbors.push_back(Neighbor<State, Action, double>(candidate.first, act, candidate.second));
-                neighbors.insert(neighbors.begin(),Neighbor<State, Action, double>(candidate.first, act, candidate.second));
+                neighbors.insert(neighbors.begin(), Neighbor<State, Action, double>(candidate.first, act, candidate.second));
                 break;
             }
-            else{
-                std::cout<<"This neighbor is not valid!"<<std::endl;
+            else
+            {
+                std::cout << "This neighbor is not valid!" << std::endl;
             }
- 
         }
         // findReedsSheppPath(state,goal,path);
         // if (path.back().time <= m_lastGoalConstraint)
@@ -638,18 +655,19 @@ private:
         return true;
     }
 
-    void singleAgentPath(State &start,State &goal,std::vector<State> &path){
-        std::cout<<"Not implemented"<<std::endl;
-        
+    void singleAgentPath(State &start, State &goal, std::vector<State> &path)
+    {
+        std::cout << "Not implemented" << std::endl;
+
         return;
     }
 
-
-    void findReedsSheppPath(State &start, State &goal,std::vector<State>&path){
+    void findReedsSheppPath(State &start, State &goal, std::vector<State> &path)
+    {
         ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
         OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
         OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
-        std::cout<<"reeds shepp find path"<<start<<"  "<<goal<<std::endl;
+        std::cout << "reeds shepp find path" << start << "  " << goal << std::endl;
         rsStart->setXY(start.x, start.y);
         rsStart->setYaw(-start.yaw);
         rsEnd->setXY(goal.x, goal.y);
@@ -657,7 +675,7 @@ private:
         ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
             reedsSheppSpace.reedsShepp(rsStart, rsEnd);
         path.push_back(start);
-  
+
         for (auto pathidx = 0; pathidx < 5; pathidx++)
         {
             if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
@@ -706,7 +724,7 @@ private:
             std::vector<std::pair<State, double>> next_path;
             if (generatePath(s, act, deltat, dx, next_path))
             {
-                for (auto iter = next_path.begin()+1; iter != next_path.end(); iter++)
+                for (auto iter = next_path.begin() + 1; iter != next_path.end(); iter++)
                 {
                     State next_s = iter->first;
                     // gscore += iter->second;
@@ -721,13 +739,13 @@ private:
             }
         }
 
-        //print
-        std::cout<<"print reeds shepp path  "<<path.size()<<std::endl;
-        for(auto &state:path){
-            std::cout<<state<<"   ";
+        // print
+        std::cout << "print reeds shepp path  " << path.size() << std::endl;
+        for (auto &state : path)
+        {
+            std::cout << state << "   ";
         }
-        std::cout<<std::endl;
-        
+        std::cout << std::endl;
     }
 
 private:
@@ -739,6 +757,16 @@ private:
             return (n1.second > n2.second);
         }
     };
+
+    bool arrivedGoal(State s, int agent)
+    {
+        double dist;
+        auto goal = getGoal(agent);
+        double dyaw = pow(cos(s.yaw) - cos(goal.yaw), 2) + pow(sin(s.yaw) - sin(goal.yaw), 2);
+        dist = sqrt(pow(s.x - goal.x, 2) + pow(s.y - goal.y, 2) + dyaw);
+        return (dist < 1e-2);
+    }
+
     void updateCostmap()
     {
         boost::heap::fibonacci_heap<std::pair<State, double>,
@@ -805,11 +833,14 @@ private:
 
     std::pair<State, double> getNextStateCloseToGoal(State startState, int act, double deltaSteer, double deltaLength)
     {
-        double xSucc, ySucc, yawSucc,dx,dy,dyaw;
+        std::cout << "debug next state  " << startState << "    " << act << "   " << deltaSteer << "    " << deltaLength << std::endl;
+        double xSucc, ySucc, yawSucc, dx, dy, dyaw;
         if (act == 0 || act == 3)
         {
             // double L = std::min(Constants::dx[act], deltaLength);
-            if(Constants::dx[act]<deltaLength){
+            std::cout << Constants::dx[act] << "    " << deltaLength << std::endl;
+            if (fabs(Constants::dx[act]) < fabs(deltaLength))
+            {
                 State s = startState;
                 xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
                         Constants::dy[act] * sin(-s.yaw);
@@ -817,18 +848,21 @@ private:
                         Constants::dy[act] * cos(-s.yaw);
                 yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
                 State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
-                return {nextState, Constants::dx[act]};
+                // return {nextState, Constants::dx[act]};
+                std::cout << "???  " << nextState << std::endl;
+                return {nextState, 0};
             }
-            else{
-                dyaw=0;
-                dx=deltaLength;
-                dy=0;
+            else
+            {
+                dyaw = 0;
+                dx = deltaLength;
+                dy = 0;
             }
-            
         }
         else
         {
-            if(Constants::dyaw[act]<deltaSteer){
+            if (fabs(Constants::dyaw[act]) < fabs(deltaSteer))
+            {
                 double dyaw = std::min(Constants::dyaw[act], deltaSteer);
                 State s = startState;
                 xSucc = s.x + Constants::dx[act] * cos(-s.yaw) -
@@ -837,15 +871,18 @@ private:
                         Constants::dy[act] * cos(-s.yaw);
                 yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
                 State nextState(xSucc, ySucc, yawSucc, s.time + 1);
-                return {nextState, Constants::dx[0]* Constants::penaltyTurning};
+                // return {nextState, Constants::dx[0] * Constants::penaltyTurning};
+                return {nextState, 0};
             }
-            else{
-                dyaw=deltaSteer;
-                dx=Constants::r*sin(dyaw);
-                dy=-Constants::r*(1-cos(dyaw));
-                if(act==2||act==5){
-                    dx=-dx;
-                    dy=-dy;
+            else
+            {
+                dyaw = deltaSteer;
+                dx = Constants::r * sin(dyaw);
+                dy = -Constants::r * (1 - cos(dyaw));
+                if (act == 2 || act == 5)
+                {
+                    dx = -dx;
+                    dy = -dy;
                 }
             }
         }
@@ -854,7 +891,9 @@ private:
         ySucc = s.y + dx * sin(-s.yaw) + dy * cos(-s.yaw);
         yawSucc = Constants::normalizeHeadingRad(s.yaw + dyaw);
         State nextState(xSucc, ySucc, yawSucc, s.time + 1);
-        return {nextState,sqrt(dx*dx+dy*dy)};
+
+        // return {nextState, sqrt(dx * dx + dy * dy)};
+        return {nextState, 0};
     }
 
     bool generatePath(State startState, int act, double deltaSteer,
@@ -970,7 +1009,7 @@ void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
     dimx = dim[0].as<size_t>();
     dimy = dim[1].as<size_t>();
 
-    std::cout<<"dimx="<<dimx<<"      dimy="<<dimy<<std::endl;
+    std::cout << "dimx=" << dimx << "      dimy=" << dimy << std::endl;
     for (const auto &node : map_config["map"]["obstacles"])
     {
         obstacles.insert(Location(node[0].as<double>(), node[1].as<double>()));
@@ -987,7 +1026,7 @@ void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
     }
 }
 
-void dumpOutputToYaml(std::string outputFile,std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
+void dumpOutputToYaml(std::string outputFile, std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
 {
     double makespan = 0, flowtime = 0, cost = 0;
     for (const auto &s : solution)
@@ -1134,22 +1173,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    size_t dimx,dimy;
+    size_t dimx, dimy;
     std::unordered_set<Location> obstacles;
     // std::multimap<int, State> dynamic_obstacles;
     std::vector<State> goals;
     std::vector<State> startStates;
-    readMapsFromYaml(inputFile,dimx,dimy,startStates,goals,obstacles);
+    readMapsFromYaml(inputFile, dimx, dimy, startStates, goals, obstacles);
     Environment mapf(dimx, dimy, obstacles, goals);
 
-    std::vector<PlanResult<State,Action,double>>solution;
-    bool success=false;
+    std::vector<PlanResult<State, Action, double>> solution;
+    bool success = false;
     Timer iterTimer;
-    PIBT<State,Action,double,Environment> pibt(mapf,startStates);
+    PIBT<State, Action, double, Environment> pibt(mapf, startStates);
     pibt.PIBT_solve();
-    solution=pibt.getSolution();
-    dumpOutputToYaml(outputFile,solution,0);
- 
+    solution = pibt.getSolution();
+    dumpOutputToYaml(outputFile, solution, 0);
 
     return 0;
 }

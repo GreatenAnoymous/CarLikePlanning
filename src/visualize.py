@@ -233,6 +233,7 @@ if __name__ == "__main__":
         print("ERROR loading config file", os.path.abspath(os.path.join(
             os.getcwd(), ".."))+"/src/config1.yaml", " using default param to plot")
 
+    print(schedule)
     animation = Animation(map, schedule)
 
     if args.video:
