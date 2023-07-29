@@ -399,7 +399,7 @@ public:
 
         neighbors.clear();
         double g = Constants::dx[0];
-        std::cout << "current state of agent "<<agent<<"=" << s <<"  goal state="<<getGoal(agent) << std::endl;
+        std::cout << "current state of agent " << agent << "=" << s << "  goal state=" << getGoal(agent) << std::endl;
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
             double xSucc, ySucc, yawSucc;
@@ -516,8 +516,8 @@ private:
         // check if the s is close enough to the goal state, if so, add the goal state to neighbors
         double goal_distance = sqrt(pow(state.x - getGoal(agent).x, 2) + pow(state.y - getGoal(agent).y, 2));
 
-        if (goal_distance > 3 * (Constants::LB + Constants::LF))
-            return;
+        // if (goal_distance > 3 * (Constants::LB + Constants::LF))
+        //     return;
         ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
         OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
         OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
@@ -849,7 +849,7 @@ private:
                 yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
                 State nextState(xSucc, ySucc, yawSucc, startState.time + 1);
                 // return {nextState, Constants::dx[act]};
-                std::cout << "???  " << nextState << std::endl;
+
                 return {nextState, 0};
             }
             else

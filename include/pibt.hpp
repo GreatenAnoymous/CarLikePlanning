@@ -26,6 +26,7 @@ namespace libMultiRobotPlanning
         std::vector<size_t> undecided;
 
         std::vector<State> currentStates;
+        std::vector<State> lastStates;
         std::vector<State> nextPlan;
         std::vector<Action> lastActions;
         std::vector<int> lastGoalReleasedTime;
@@ -57,10 +58,10 @@ namespace libMultiRobotPlanning
 
         void sort_list(std::vector<size_t> &list)
         {
-            // for (auto k : list)
-            // {
-            //     distance_heuristic[k] = m_env.admissibleHeuristic(currentStates[k], k);
-            // }
+            for (auto k : list)
+            {
+                distance_heuristic[k] = m_env.admissibleHeuristic(currentStates[k], k);
+            }
             auto comparator = [&](size_t ai, size_t aj)
             {
                 if ((time_steps - lastGoalReleasedTime[ai]) != (time_steps - lastGoalReleasedTime[aj]))
@@ -94,13 +95,14 @@ namespace libMultiRobotPlanning
             {
                 auto goal = m_env.getGoal(i);
                 auto curr = currentStates[i];
-    
+
                 auto dyaw = pow(cos(goal.yaw) - cos(curr.yaw), 2) + pow(sin(goal.yaw) - sin(curr.yaw), 2);
                 auto dist = sqrt(pow(goal.x - curr.x, 2) + pow(goal.y - curr.y, 2) + dyaw);
                 if (dist > 1e-1)
                     flag = false;
-                else{
-                    distance_heuristic[i]=0;
+                else
+                {
+                    distance_heuristic[i] = 0;
                     lastGoalReleasedTime[i] = time_steps;
                 }
             }
@@ -128,7 +130,7 @@ namespace libMultiRobotPlanning
             distance_heuristic = std::vector<double>(num_agents, 0);
             for (int i = 0; i < num_agents; i++)
             {
-                distance_heuristic[i] = m_env.admissibleHeuristic(initialStates[i],i);
+                distance_heuristic[i] = m_env.admissibleHeuristic(initialStates[i], i);
             }
             solution = std::vector<PlanResult<State, Action, Cost>>(num_agents, PlanResult<State, Action, Cost>());
             update_priorities();
@@ -213,24 +215,33 @@ namespace libMultiRobotPlanning
                 {
                     if (s.agentCollision(next))
                     {
+                        std::cout<<"next  "<<next<<"  has already been occupied"<<std::endl;
                         occupied_flag = true;
                         break;
                     }
                 }
-                if (occupied_flag)
+                if (occupied_flag){
                     continue;
+                }
 
                 // avoid colliding with parent agents
                 if (parent_agent != -1)
                 {
-                    if (currentStates[parent_agent].agentCollision(next) == true)
+                    if (currentStates[parent_agent].agentCollision(next) == true){
+                        std::cout<<"invalid due to collide with parent agent next plan"<<std::endl;
                         continue;
+                    }
+                        
                     auto ps = State(parent_state[0], parent_state[1], parent_state[2]);
-                    if (ps.agentCollision(next) == true)
+                    if (ps.agentCollision(next) == true){
+                        std::cout<<"invalid due to collide with parent original state"<<std::endl;
                         continue;
+                    }
+                        
                     // std::cout << "avoid collision with parent agent " << parent_agent << std::endl;
                 }
                 bool valid = true;
+                // bool robust = true;
                 for (size_t k = 0; k < undecided.size();)
                 {
                     int ak = undecided[k];
@@ -238,6 +249,7 @@ namespace libMultiRobotPlanning
 
                     if (sk.agentCollision(next))
                     {
+                        // robust = false;
                         std::cout << "parent agent " << agent << "  to  " << next << " trying to move child agent " << ak << std::endl;
                         if (PIBT_func(ak, agent, {next.x, next.y, next.yaw}) == false)
                         {
@@ -250,7 +262,7 @@ namespace libMultiRobotPlanning
                         k++;
                     }
                 }
-                if (valid)
+                if (valid )
                 {
                     nextPlan[agent] = next;
                     solution[agent].states.push_back({next, nbr.cost});
@@ -262,6 +274,7 @@ namespace libMultiRobotPlanning
                     return true;
                 }
             }
+            std::cout<<"PIBT for agent "<<agent<<"  invalid"<<std::endl;
             undecided.push_back(agent);
             sort_list(undecided);
             // throw std::runtime_error("PIBT explored all of the neighbors, none of them is collision-free");
