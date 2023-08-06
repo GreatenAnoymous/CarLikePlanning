@@ -7,6 +7,8 @@
  * @copyright Copyright (c) 2020
  *
  */
+
+#include "json.hpp"
 #include "cl_cbs.hpp"
 
 #include <sys/stat.h>
@@ -352,7 +354,7 @@ void readAgentConfig()
                        0, -Constants::deltat, Constants::deltat};
 }
 
-int main(int argc, char *argv[])
+int CBS_exe(int argc, char *argv[])
 {
     namespace po = boost::program_options;
     // Declare the supported options.
@@ -534,19 +536,6 @@ int main(int argc, char *argv[])
         out << "schedule:" << std::endl;
         for (size_t a = 0; a < solution.size(); ++a)
         {
-            // std::cout << "Solution for: " << a << std::endl;
-            // for (size_t i = 0; i < solution[a].actions.size(); ++i) {
-            //   std::cout << solution[a].states[i].second << ": "
-            //             << solution[a].states[i].first << "->"
-            //             << solution[a].actions[i].first
-            //             << "(cost: " << solution[a].actions[i].second << ")"
-            //             << std::endl;
-            // }
-            // std::cout << solution[a].states.back().second << ": "
-            //           << solution[a].states.back().first << std::endl;
-
-            // check the
-
             out << "  agent" << a << ":" << std::endl;
             for (const auto &state : solution[a].states)
             {
@@ -561,4 +550,131 @@ int main(int argc, char *argv[])
     {
         std::cout << "\033[1m\033[31m Fail to find paths \033[0m\n";
     }
+}
+
+void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
+                      std::vector<State> &startStates,
+                      std::vector<State> &goals,
+                      std::unordered_set<Location> &obstacles)
+{
+
+    YAML::Node map_config;
+    try
+    {
+        map_config = YAML::LoadFile(inputFile);
+    }
+    catch (std::exception &e)
+    {
+        std::cerr << "\033[1m\033[31mERROR: Failed to load map file: " << inputFile
+                  << "\033[0m \n";
+        exit(0);
+    }
+    const auto &dim = map_config["map"]["dimensions"];
+    dimx = dim[0].as<size_t>();
+    dimy = dim[1].as<size_t>();
+
+    for (const auto &node : map_config["map"]["obstacles"])
+    {
+        obstacles.insert(Location(node[0].as<double>(), node[1].as<double>()));
+    }
+    for (const auto &node : map_config["agents"])
+    {
+        const auto &start = node["start"];
+        const auto &goal = node["goal"];
+        startStates.emplace_back(State(start[0].as<double>(), start[1].as<double>(),
+                                       start[2].as<double>()));
+        // std::cout << "s: " << startStates.back() << std::endl;
+        goals.emplace_back(State(goal[0].as<double>(), goal[1].as<double>(),
+                                 goal[2].as<double>()));
+    }
+}
+
+void eval()
+{
+    std::string data_file = "./data/cbs.csv";
+    std::string input_folder = "./benchmark/map50by50/";
+
+    std::string obs = "empty";
+    std::vector<int> num_agents = {5, 10, 15, 20};
+    int num_instances = 50;
+    std::ofstream out(data_file);
+    out << "num_robots,makespan,cost,runtime,success_rate" << std::endl;
+    for (auto n : num_agents)
+    {
+        double makespan_sum = 0;
+        double cost_sum = 0;
+        double runtime_sum = 0;
+        double succ_sum = 0;
+
+        std::string instance_prefix = input_folder + "agents" + std::to_string(n) + "/" + obs + "/" + "map_50by50_obst0_agents" + std::to_string(n) + "_ex";
+        for (int k = 0; k < num_instances; k++)
+        {
+            std::string instance = instance_prefix + std::to_string(k) + ".yaml";
+            std::cout << instance << std::endl;
+            size_t dimx, dimy;
+            std::unordered_set<Location> obstacles;
+            // std::multimap<int, State> dynamic_obstacles;
+            std::vector<State> goals;
+            std::vector<State> startStates;
+            std::multimap<int, State> dynamic_obstacles;
+
+            readMapsFromYaml(instance, dimx, dimy, startStates, goals, obstacles);
+            // std::cout << startStates.size() << "   " << goals.size() << std::endl;
+            Environment<Location, State, Action, double, Conflict, Constraint,
+                        Constraints>
+                mapf(dimx, dimy, obstacles, dynamic_obstacles, goals);
+
+            CL_CBS<State, Action, double, Conflict, Constraints,
+                   Environment<Location, State, Action, double, Conflict, Constraint,
+                               Constraints>>
+                cbsHybrid(mapf);
+            std::vector<PlanResult<State, Action, double>> solution;
+            Timer iterTimer;
+            bool success = cbsHybrid.search(startStates, solution);
+            iterTimer.stop();
+            if (success)
+            {
+                double makespan = 0, flowtime = 0, cost = 0;
+                succ_sum++;
+                for (const auto &s : solution)
+                    cost += s.cost;
+                for (size_t a = 0; a < solution.size(); ++a)
+                {
+                    // calculate makespan
+                    double current_makespan = 0;
+                    for (size_t i = 0; i < solution[a].actions.size(); ++i)
+                    {
+                        // some action cost have penalty coefficient
+
+                        if (solution[a].actions[i].second < Constants::dx[0])
+                            current_makespan += solution[a].actions[i].second;
+                        else if (solution[a].actions[i].first % 3 == 0)
+                            current_makespan += Constants::dx[0];
+                        else
+                            current_makespan += Constants::r * Constants::deltat;
+                    }
+                    flowtime += current_makespan;
+                    if (current_makespan > makespan)
+                        makespan = current_makespan;
+                }
+                makespan_sum += makespan;
+                cost_sum += cost;
+                runtime_sum += iterTimer.elapsedSeconds();
+            }
+        }
+
+        if (succ_sum != 0)
+        {
+            out << std::to_string(n) << "," << std::to_string(makespan_sum / succ_sum)
+                << "," << std::to_string(cost_sum / succ_sum)
+                << "," << std::to_string(runtime_sum / succ_sum)
+                << "," << std::to_string(succ_sum / num_instances) << std::endl;
+        }
+    }
+    out.close();
+}
+
+int main(int argc, char *argv[])
+{
+    eval();
 }

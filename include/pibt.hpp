@@ -13,6 +13,9 @@
 #include <cassert>
 #include <iostream>
 #include <cmath>
+#define DEBUG_ENABLE 1
+#define COLLISION_RANGE 8
+
 namespace libMultiRobotPlanning
 {
     template <typename State, typename Action, typename Cost, typename Environment>
@@ -24,6 +27,8 @@ namespace libMultiRobotPlanning
         std::vector<PlanResult<State, Action, Cost>> solution;
         std::unordered_set<State> occupied;
         std::vector<size_t> undecided;
+        std::unordered_set<size_t> undecided_set;
+        std::vector<std::vector<size_t>> nearby_agents;
 
         std::vector<State> currentStates;
         std::vector<State> lastStates;
@@ -32,6 +37,8 @@ namespace libMultiRobotPlanning
         std::vector<int> lastGoalReleasedTime;
         std::vector<double> distance_heuristic;
         std::vector<size_t> agents_list;
+
+        std::vector<std::map<int, float>> history;
 
         // std::priority_queue<int,std::vector<int>,sc
         int time_steps;
@@ -47,13 +54,14 @@ namespace libMultiRobotPlanning
             }
 
             sort_list(agents_list);
-            // debug agent list
+#if DEBUG_ENABLE
             std::cout << "debug agent list" << std::endl;
             for (auto agent : agents_list)
             {
                 std::cout << agent << "  ";
             }
             std::cout << std::endl;
+#endif
         }
 
         void sort_list(std::vector<size_t> &list)
@@ -83,6 +91,23 @@ namespace libMultiRobotPlanning
                     if (currentStates[i].agentCollision(currentStates[j]))
                     {
                         std::cout << "found collision between agent " << i << "  and  " << j << std::endl;
+                    }
+                }
+            }
+        }
+
+        void compute_nearby_agents()
+        {
+            size_t num_agents = m_env.getNumAgents();
+            nearby_agents = std::vector<std::vector<size_t>>(num_agents, std::vector<size_t>());
+            for (size_t i = 0; i < num_agents; i++)
+            {
+                for (size_t j = i + 1; j < num_agents; j++)
+                {
+                    if (sqrt(pow(currentStates[i].x - currentStates[j].x, 2) + pow(currentStates[j].y - currentStates[j].y, 2)) < COLLISION_RANGE)
+                    {
+                        nearby_agents[i].push_back(j);
+                        nearby_agents[j].push_back(i);
                     }
                 }
             }
@@ -134,6 +159,7 @@ namespace libMultiRobotPlanning
             }
             solution = std::vector<PlanResult<State, Action, Cost>>(num_agents, PlanResult<State, Action, Cost>());
             update_priorities();
+            history = std::vector<std::map<int, float>>(num_agents, std::map<int, float>());
         }
 
         void setStates(int agent, State &state)
@@ -148,7 +174,9 @@ namespace libMultiRobotPlanning
             while (time_steps <= max_timesteps)
             {
                 update_priorities();
+#if DEBUG_ENABLE
                 std::cout << "current time step=" << time_steps << std::endl;
+#endif
                 time_steps++;
                 PIBT_loop();
                 // std::cout << "current state=" << currentStates[0] << "  goal state= " << m_env.getGoal(0) << std::endl;
@@ -157,14 +185,18 @@ namespace libMultiRobotPlanning
                     std::cout << "All robots have arrived the goal states" << std::endl;
                     break;
                 }
+#if DEBUG_ENABLE
                 checkCollision();
                 std::cout << "===================" << std::endl;
+#endif
             }
         }
         void PIBT_loop()
         {
             // initialize undecided and sort the agents
+            compute_nearby_agents();
             undecided = agents_list;
+            undecided_set = std::unordered_set<size_t>(undecided.begin(), undecided.end());
             occupied.clear();
             while (undecided.empty() == false)
             {
@@ -173,6 +205,7 @@ namespace libMultiRobotPlanning
             }
 
             // update
+
             currentStates = nextPlan;
         }
 
@@ -183,101 +216,152 @@ namespace libMultiRobotPlanning
 
         bool PIBT_func(int agent, int parent_agent = -1, std::vector<double> parent_state = {-1, -1, -1})
         {
-
+#if DEBUG_ENABLE
             std::cout << "PIBT calls to agent " << agent << std::endl;
-            // if (std::find(undecided.begin(), undecided.end(), agent) == undecided.end())
-            // {
-            //     std::cout << "agent " << agent << " not in undecided" << std::endl;
-            //     for (auto agent : undecided)
-            //     {
-            //         std::cout << agent << "  ";
-            //     }
-            //     std::cout << std::endl;
-            // }
-
-            // assert(std::find(undecided.begin(), undecided.end(), agent) != undecided.end());
+#endif
             undecided.erase(std::remove(undecided.begin(), undecided.end(), agent));
+            undecided_set.erase(agent);
             std::vector<Neighbor<State, Action, double>> neighbors;
             m_env.getNeighbors(currentStates[agent], lastActions[agent], neighbors, agent);
+            // m_env.addGoalToNeighborIfClose(currentStates[agent], lastActions[agent], neighbors, agent);
+            m_env.singleRobotMotionGuide(currentStates[agent], lastActions[agent], neighbors, agent);
+            m_env.sortNeighbors(neighbors, agent);
 
-            // to do: sort neighbors based on distance heuristic
+            std::vector<int> nearby_undecided;
+            std::vector<State> nearby_occupied;
+            for (auto &s : occupied)
+            {
+                if (sqrt(pow(s.x - currentStates[agent].x, 2) + pow(s.y - currentStates[agent].y, 2)) < COLLISION_RANGE)
+                {
+                    nearby_occupied.push_back(s);
+                }
+            }
+
+#if DEBUG_ENABLE
             for (auto nbr : neighbors)
             {
-                std::cout << "nbr " << nbr.state << "  f= " << m_env.admissibleHeuristic(nbr.state, agent) + nbr.cost << "admissible H=  " << m_env.admissibleHeuristic(nbr.state, agent) << "   cost=" << nbr.cost << std::endl;
+                std::cout << "nbr " << nbr.state << "  act= " << nbr.action << "  f= " << m_env.admissibleHeuristic(nbr.state, agent) + 0.3 * nbr.cost * (1 + m_env.getStateHistory(agent, nbr.state)) << "admissible H=  " << m_env.admissibleHeuristic(nbr.state, agent) << "   cost=" << nbr.cost << "  state history=" << m_env.getStateHistory(agent, nbr.state) << std::endl;
             }
             std::cout << std::endl;
+#endif
             for (auto nbr : neighbors)
             {
 
                 auto next = nbr.state;
                 bool occupied_flag = false;
-                for (auto s : occupied)
+                for (auto s : nearby_occupied)
                 {
                     if (s.agentCollision(next))
                     {
-                        std::cout<<"next  "<<next<<"  has already been occupied"<<std::endl;
+
+#if DEBUG_ENABLE
+                        std::cout << "next  " << next << "  has already been occupied" << std::endl;
+#endif
                         occupied_flag = true;
                         break;
                     }
                 }
-                if (occupied_flag){
+                if (occupied_flag)
+                {
                     continue;
                 }
 
                 // avoid colliding with parent agents
                 if (parent_agent != -1)
                 {
-                    if (currentStates[parent_agent].agentCollision(next) == true){
-                        std::cout<<"invalid due to collide with parent agent next plan"<<std::endl;
+                    if (currentStates[parent_agent].agentCollision(next) == true)
+                    {
+#if DEBUG_ENABLE
+                        std::cout << "invalid due to collide with parent agent next plan" << std::endl;
+#endif
                         continue;
                     }
-                        
+
                     auto ps = State(parent_state[0], parent_state[1], parent_state[2]);
-                    if (ps.agentCollision(next) == true){
-                        std::cout<<"invalid due to collide with parent original state"<<std::endl;
+                    if (ps.agentCollision(next) == true)
+                    {
+#if DEBUG_ENABLE
+                        std::cout << "invalid due to collide with parent original state" << std::endl;
+#endif
                         continue;
                     }
-                        
-                    // std::cout << "avoid collision with parent agent " << parent_agent << std::endl;
+#if DEBUG_ENABLE
+                    std::cout << "avoid collision with parent agent " << parent_agent << std::endl;
+#endif
                 }
+                occupied.insert(next);
                 bool valid = true;
                 // bool robust = true;
-                for (size_t k = 0; k < undecided.size();)
+                for (auto ak : nearby_agents[agent])
                 {
-                    int ak = undecided[k];
+                    if (undecided_set.find(ak) == undecided_set.end())
+                        continue;
                     auto sk = currentStates[ak];
-
                     if (sk.agentCollision(next))
                     {
-                        // robust = false;
+// robust = false;
+#if DEBUG_ENABLE
                         std::cout << "parent agent " << agent << "  to  " << next << " trying to move child agent " << ak << std::endl;
+#endif
                         if (PIBT_func(ak, agent, {next.x, next.y, next.yaw}) == false)
                         {
                             valid = false;
                             break;
                         }
                     }
-                    else
-                    {
-                        k++;
-                    }
                 }
-                if (valid )
+                // for (size_t k = 0; k < undecided.size();)
+                // {
+                //     int ak = undecided[k];
+                //     auto sk = currentStates[ak];
+
+                //     if (sk.agentCollision(next))
+                //     {
+                //         // robust = false;
+                //         std::cout << "parent agent " << agent << "  to  " << next << " trying to move child agent " << ak << std::endl;
+                //         if (PIBT_func(ak, agent, {next.x, next.y, next.yaw}) == false)
+                //         {
+                //             valid = false;
+                //             break;
+                //         }
+                //     }
+                //     else
+                //     {
+                //         k++;
+                //     }
+                // }
+                if (valid)
                 {
                     nextPlan[agent] = next;
+                    m_env.updateHistory(agent, next);
                     solution[agent].states.push_back({next, nbr.cost});
                     solution[agent].actions.push_back({nbr.action, nbr.cost});
                     solution[agent].cost += nbr.cost;
                     lastActions[agent] = nbr.action;
-                    occupied.insert(next);
+#if DEBUG_ENABLE
                     std::cout << "agent " << agent << "   move to " << next << std::endl;
+#endif
                     return true;
                 }
+                else
+                {
+                    occupied.erase(next);
+                }
             }
-            std::cout<<"PIBT for agent "<<agent<<"  invalid"<<std::endl;
+            // if(parent_agent==-1){
+            //     nextPlan[agent] = currentStates[agent];
+            //     occupied.insert(currentStates[agent]);
+            //     // lastActions[agent] = nbr.action;
+            //     return false;
+            // }
+#if DEBUG_ENABLE
+            std::cout << "PIBT for agent " << agent << "  invalid" << std::endl;
+#endif
             undecided.push_back(agent);
+            undecided_set.insert(agent);
+
             sort_list(undecided);
-            // throw std::runtime_error("PIBT explored all of the neighbors, none of them is collision-free");
+
             return false;
         }
     };

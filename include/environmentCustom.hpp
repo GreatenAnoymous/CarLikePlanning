@@ -1,18 +1,27 @@
-#include "pibt.hpp"
-#include <fstream>
+
+#pragma once
+#include <ompl/base/State.h>
+#include <ompl/base/spaces/DubinsStateSpace.h>
+#include <ompl/base/spaces/ReedsSheppStateSpace.h>
+#include <ompl/base/spaces/SE2StateSpace.h>
 #include <iostream>
 #include <boost/functional/hash.hpp>
-#include <boost/program_options.hpp>
-#include <yaml-cpp/yaml.h>
+#include <boost/geometry.hpp>
+#include <boost/geometry/algorithms/intersection.hpp>
+#include <boost/geometry/geometries/linestring.hpp>
+#include <boost/geometry/geometries/point_xy.hpp>
+#include <boost/heap/fibonacci_heap.hpp>
+#include <unordered_map>
+#include <unordered_set>
+#include <boost/functional/hash.hpp>
+#include "neighbor.hpp"
+#include "planresult.hpp"
 #include "config.hpp"
-#include "timer.hpp"
-#include "json.hpp"
 #include <boost/numeric/ublas/matrix.hpp>
 #include <random>
 
 using libMultiRobotPlanning::Neighbor;
 using libMultiRobotPlanning::OmplState;
-using libMultiRobotPlanning::PIBT;
 using libMultiRobotPlanning::PlanResult;
 using libMultiRobotPlanning::Point;
 using libMultiRobotPlanning::Segment;
@@ -185,6 +194,13 @@ public:
         m_goals[agentIdx] = State(gx, gy, yaw);
     }
 
+    int getStateId(State &s)
+    {
+        int xi = static_cast<int>(s.x / (2 * Constants::xyResolution));
+        int yi = static_cast<int>(s.y / (2 * Constants::xyResolution));
+        return xi * m_dimy + yi;
+    }
+
     void setLowLevelContext(size_t agentIdx)
     {
         m_agentIdx = agentIdx;
@@ -236,10 +252,7 @@ public:
 
         neighbors.clear();
         double g = Constants::dx[0];
-
-#if DEBUG_ENABLE
         std::cout << "current state of agent " << agent << "=" << s << "  goal state=" << getGoal(agent) << std::endl;
-#endif
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
             double xSucc, ySucc, yawSucc;
@@ -279,7 +292,7 @@ public:
             }
             else
             {
-                // std::cout << "This neighbor is not valid!" << std::endl;
+                std::cout << "This neighbor is not valid!" << std::endl;
             }
         }
         // wait
@@ -291,12 +304,13 @@ public:
             if (arrivedGoal(tempState, agent) == false)
             {
                 g = g * Constants::penaltyWait;
-#if DEBUG_ENABLE
                 std::cout << " penalty to wait  g=" << g << " penalty=" << Constants::penaltyWait << std::endl;
-#endif
             }
             neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
         }
+
+        // addGoalToNeighborIfClose(s, action, neighbors, agent);
+
         // analytic expansioned neighbor
     }
 
@@ -349,17 +363,6 @@ public:
                 }
             }
         return true;
-    }
-
-    void singleRobotMotionGuide(State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors, int agent)
-    {
-
-        Neighbor<State, Action, double> next(state, action, Constants::dx[0]);
-
-        windowedSearch(state, action, agent, next);
-
-        next.state.greedy = 1;
-        neighbors.push_back(next);
     }
 
     void addGoalToNeighborIfClose(State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors, int agent)
@@ -445,16 +448,14 @@ public:
                     }
                 }
                 candidate.first.greedy = 1;
-#if DEBUG
                 std::cout << "reeds-shepp  state is" << candidate.first << std::endl;
-#endif
                 // neighbors.push_back(Neighbor<State, Action, double>(candidate.first, act, candidate.second));
                 neighbors.insert(neighbors.begin(), Neighbor<State, Action, double>(candidate.first, act, cost));
                 break;
             }
             else
             {
-                // std::cout << "This neighbor is not valid!" << std::endl;
+                std::cout << "This neighbor is not valid!" << std::endl;
             }
         }
     }
@@ -485,214 +486,100 @@ private:
             if (s.obsCollision(*it))
                 return false;
         }
+        // for (auto it = m_constraints->constraints.begin();
+        //      it != m_constraints->constraints.end(); it++)
+        // {
+        //     if (!it->satisfyConstraint(s))
+        //         return false;
+        // }
 
-        auto it = m_dynamic_obstacles.equal_range(s.time);
-        for (auto itr = it.first; itr != it.second; ++itr)
-        {
-            if (s.agentCollision(itr->second))
-                return false;
-        }
-        auto itlow = m_dynamic_obstacles.lower_bound(-s.time);
-        auto itup = m_dynamic_obstacles.upper_bound(-1);
-        for (auto it = itlow; it != itup; ++it)
-            if (s.agentCollision(it->second))
-                return false;
         return true;
     }
 
-    void windowedSearch(State &start, Action action, int agentId, Neighbor<State, Action, double> &next, int window = 25)
+    void findReedsSheppPath(State &start, State &goal, std::vector<State> &path)
     {
-        double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));
-        if (goal_distance < 1e-1)
-        {
-            next.state = getGoal(agentId);
-            next.cost = 0;
-            next.action = 1;
-            return;
-        }
-        using AStarNode_p = std::shared_ptr<AStarNode>;
-        auto compare = [&](AStarNode_p a1, AStarNode_p a2)
-        {
-            if (a1->f != a2->f)
-                return a1->f > a2->f;
-            return a1->cost < a2->cost;
-        };
+        ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
+        OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
+        OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
+        std::cout << "reeds shepp find path" << start << "  " << goal << std::endl;
+        rsStart->setXY(start.x, start.y);
+        rsStart->setYaw(-start.yaw);
+        rsEnd->setXY(goal.x, goal.y);
+        rsEnd->setYaw(-goal.yaw);
+        ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
+            reedsSheppSpace.reedsShepp(rsStart, rsEnd);
+        path.push_back(start);
 
-        std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
-        std::unordered_map<int, AStarNode_p> closed;
-        auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
-        startNode->sid = calcIndex(start);
-        startNode->act = action;
-        open.push(startNode);
-        int t0 = start.time;
-        while (!open.empty())
+        for (auto pathidx = 0; pathidx < 5; pathidx++)
         {
-            auto n = open.top();
-            // if (n->state.time >= t0 + window)
-            // {
-            //     auto curr = n;
-            //     while (curr->parent != startNode)
-            //     {
-            //         curr = curr->parent;
-            //     }
-            //     next.action = curr->act;
-            //     next.cost = curr->cost;
-            //     next.state = curr->state;
-            //     // std::reverse(path.begin(), path.end());
-            //     return;
-            // }
-            double goal_distance =
-                sqrt(pow(n->state.x - getGoal(agentId).x, 2) + pow(n->state.y - getGoal(agentId).y, 2));
-            if (goal_distance <= 3 * (Constants::LB + Constants::LF))
+            if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
+                continue;
+            double deltat = 0, dx = 0, act = 0, cost = 0;
+            switch (reedsShepppath.type_[pathidx])
             {
-                ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
-                OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
-                OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
-                rsStart->setXY(n->state.x, n->state.y);
-                rsStart->setYaw(-n->state.yaw);
-                rsEnd->setXY(getGoal(agentId).x, getGoal(agentId).y);
-                rsEnd->setYaw(-getGoal(agentId).yaw);
-                ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
-                    reedsSheppSpace.reedsShepp(rsStart, rsEnd);
-                std::vector<State> tmp_path;
-                tmp_path.emplace_back(n->state);
-                bool is_solution = true;
-                for (auto pathidx = 0; pathidx < 5; pathidx++)
+            case 0: // RS_NOP
+                continue;
+                break;
+            case 1: // RS_LEFT
+                deltat = -reedsShepppath.length_[pathidx];
+                dx = Constants::r * sin(-deltat);
+                // dy = Constants::r * (1 - cos(-deltat));
+                act = 2;
+                cost = reedsShepppath.length_[pathidx] * Constants::r *
+                       Constants::penaltyTurning;
+                break;
+            case 2: // RS_STRAIGHT
+                deltat = 0;
+                dx = reedsShepppath.length_[pathidx] * Constants::r;
+                // dy = 0;
+                act = 0;
+                cost = dx;
+                break;
+            case 3: // RS_RIGHT
+                deltat = reedsShepppath.length_[pathidx];
+                dx = Constants::r * sin(deltat);
+                // dy = -Constants::r * (1 - cos(deltat));
+                act = 1;
+                cost = reedsShepppath.length_[pathidx] * Constants::r *
+                       Constants::penaltyTurning;
+                break;
+            default:
+                std::cout << "\033[1m\033[31m"
+                          << "Warning: Receive unknown ReedsSheppPath type"
+                          << "\033[0m\n";
+                break;
+            }
+            if (cost < 0)
+            {
+                cost = -cost * Constants::penaltyReversing;
+                act = act + 3;
+            }
+            State s = path.back();
+            std::vector<std::pair<State, double>> next_path;
+            if (generatePath(s, act, deltat, dx, next_path))
+            {
+                for (auto iter = next_path.begin() + 1; iter != next_path.end(); iter++)
                 {
-                    if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
-                        continue;
-                    double deltat = 0, dx = 0, act = 0, cost = 0;
-                    switch (reedsShepppath.type_[pathidx])
-                    {
-                    case 0: // RS_NOP
-                        continue;
-                        break;
-                    case 1: // RS_LEFT
-                        deltat = -reedsShepppath.length_[pathidx];
-                        dx = Constants::r * sin(-deltat);
-                        // dy = Constants::r * (1 - cos(-deltat));
-                        act = 2;
-                        cost = reedsShepppath.length_[pathidx] * Constants::r *
-                               Constants::penaltyTurning;
-                        break;
-                    case 2: // RS_STRAIGHT
-                        deltat = 0;
-                        dx = reedsShepppath.length_[pathidx] * Constants::r;
-                        // dy = 0;
-                        act = 0;
-                        cost = dx;
-                        break;
-                    case 3: // RS_RIGHT
-                        deltat = reedsShepppath.length_[pathidx];
-                        dx = Constants::r * sin(deltat);
-                        // dy = -Constants::r * (1 - cos(deltat));
-                        act = 1;
-                        cost = reedsShepppath.length_[pathidx] * Constants::r *
-                               Constants::penaltyTurning;
-                        break;
-                    default:
-                        std::cout << "\033[1m\033[31m"
-                                  << "Warning: Receive unknown ReedsSheppPath type"
-                                  << "\033[0m\n";
-                        break;
-                    }
-                    if (cost < 0)
-                    {
-                        cost = -cost * Constants::penaltyReversing;
-                        act = act + 3;
-                    }
-                    State s = tmp_path.back();
-                    std::vector<std::pair<State, double>> next_path;
-
-                    if (generatePath(s, act, deltat, dx, next_path))
-                    {
-                        for (auto iter = next_path.begin() + 1; iter != next_path.end(); iter++)
-                        {
-                            State next_s = iter->first;
-                            tmp_path.emplace_back(next_s);
-                        }
-                    }
-                    else
-                    {
-                        is_solution = false;
-                        break;
-                    }
-                }
-                if (is_solution)
-                {
-                    std::cout << "Debug windowed search found solution!!!!" << std::endl;
-                    auto curr = n;
-                    if (n != startNode)
-                    {
-                        while (curr->parent != startNode)
-                        {
-                            // path.push_back(curr->state);
-                            curr = curr->parent;
-                        }
-                        next.action = curr->act;
-                        next.cost = curr->cost;
-                        next.state = curr->state;
-                        // if (arrivedGoal(next.state, agentId))
-                        // {
-                        //     std::cout << "debug windowed search arrived goals" << next.state << "   " << getGoal(agentId) << std::endl;
-                        //     next.state = getGoal(agentId);
-                        // }
-                        // std::reverse(path.begin(), path.end());
-                        return;
-                    }
-                    else
-                    {
-                        std::cout << "debug windowed search arrived goals" << next.state << "   " << getGoal(agentId) << std::endl;
-                        std::cout << " debug reeds shepp path, goal=" << getGoal(agentId) << std::endl;
-                        for (auto &v : tmp_path)
-                        {
-                            std::cout << v << std::endl;
-                            ;
-                        }
-                        std::cout << std::endl;
-                        assert(tmp_path.size() > 1);
-                        next.action = 1;
-                        next.cost = Constants::dx[0];
-                        next.state = tmp_path[1];
-                        if (arrivedGoal(next.state, agentId))
-                        {
-                            next.state = getGoal(agentId);
-                            next.state.time = n->state.time + 1;
-                        }
-                        // for (int k = 1; k < tmp_path.size(); k++)
-                        // {
-                        //     if (tmp_path[k].time > t0 + window)
-                        //         break;
-                        //     path.push_back(tmp_path[k]);
-                        // }
-                        return;
-                    }
+                    State next_s = iter->first;
+                    // gscore += iter->second;
+                    // if (!(next_s == path.back()))
+                    // {
+                    //     cameFrom.insert(std::make_pair<>(
+                    //         next_s,
+                    //         std::make_tuple<>(path.back(), act, iter->second, gscore)));
+                    // }
+                    path.emplace_back(next_s);
                 }
             }
-
-            closed[n->sid] = n;
-            open.pop();
-            std::vector<Neighbor<State, Action, double>> neighbors;
-            getNeighbors(n->state, n->act, neighbors, agentId);
-            for (auto &nbr : neighbors)
-            {
-
-                int cid = calcIndex(nbr.state);
-                double g = n->cost + nbr.cost;
-                if (closed.find(cid) != closed.end())
-                {
-                    if (closed[cid]->cost < g)
-                    {
-                        continue;
-                    }
-                }
-                double h = admissibleHeuristic(nbr.state, agentId);
-                auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
-                child->sid = cid;
-                open.push(child);
-            }
         }
-        return;
+
+        // print
+        std::cout << "print reeds shepp path  " << path.size() << std::endl;
+        for (auto &state : path)
+        {
+            std::cout << state << "   ";
+        }
+        std::cout << std::endl;
     }
 
 private:
@@ -711,7 +598,7 @@ private:
         auto goal = getGoal(agent);
         double dyaw = pow(cos(s.yaw) - cos(goal.yaw), 2) + pow(sin(s.yaw) - sin(goal.yaw), 2);
         dist = sqrt(pow(s.x - goal.x, 2) + pow(s.y - goal.y, 2) + dyaw);
-        return (dist < 1e-1);
+        return (dist < 1e-2);
     }
 
     void updateCostmap()
@@ -766,26 +653,16 @@ private:
                     }
             }
         }
-
-        // for (size_t idx = 0; idx < m_goals.size(); idx++) {
-        //   std::cout << "---------Cost Map -------Agent: " << idx
-        //             << "------------\n";
-        //   for (size_t i = 0; i < m_dimx; i++) {
-        //     for (size_t j = 0; j < m_dimy; j++)
-        //       std::cout << holonomic_cost_maps[idx][i][j] << "\t";
-        //     std::cout << std::endl;
-        //   }
-        // }
     }
 
     std::pair<State, double> getNextStateCloseToGoal(State startState, int act, double deltaSteer, double deltaLength)
     {
-        // std::cout << "debug next state  " << startState << "    " << act << "   " << deltaSteer << "    " << deltaLength << std::endl;
+        std::cout << "debug next state  " << startState << "    " << act << "   " << deltaSteer << "    " << deltaLength << std::endl;
         double xSucc, ySucc, yawSucc, dx, dy, dyaw;
         if (act == 0 || act == 3)
         {
             // double L = std::min(Constants::dx[act], deltaLength);
-            // std::cout<<"  debug get next state close to goal:" << Constants::dx[act] << "    " << deltaLength << std::endl;
+            std::cout << Constants::dx[act] << "    " << deltaLength << std::endl;
             if (fabs(Constants::dx[act]) < fabs(deltaLength))
             {
                 State s = startState;
@@ -910,12 +787,6 @@ private:
         if (!stateValid(nextState))
             return false;
         result.emplace_back(std::make_pair<>(nextState, ratio * Constants::dx[0]));
-
-        // std::cout << "Have generate " << result.size() << " path segments:\n\t";
-        // for (auto iter = result.begin(); iter != result.end(); iter++)
-        //   std::cout << iter->first << ":" << iter->second << "->";
-        // std::cout << std::endl;
-
         return true;
     }
 
@@ -924,13 +795,13 @@ private:
     int m_dimy;
     std::vector<std::vector<std::vector<double>>> holonomic_cost_maps;
     std::unordered_set<Location> m_obstacles;
-    std::multimap<int, State> m_dynamic_obstacles;
+    std::unordered_map<int, std::vector<int>> agent_occupancy;
+    std::unordered_map<int, std::vector<int>> obstacle_occupancy;
     std::vector<State> m_goals;
     // std::vector< std::vector<int> > m_heuristic;
     // std::vector<double> m_vel_limit;
     size_t m_agentIdx;
-    // const Constraints *m_constraints;
-    // int m_lastGoalConstraint;
+
     std::vector<std::unordered_map<int, float>> history;
 
 public:
@@ -943,9 +814,9 @@ public:
         }
         else
         {
-            history[agent][sIndex] = Constants::gammaHistory * history[agent][sIndex] + 1;
+            history[agent][sIndex]++;
         }
-        // std::cout << "update history  " << agent << "   " << sIndex << "   " << history[agent][sIndex] << std::endl;
+        std::cout << "update history  " << agent << "   " << sIndex << "   " << history[agent][sIndex] << std::endl;
     }
 
     float getStateHistory(int agent, State &curr)
@@ -976,208 +847,186 @@ public:
         };
         std::sort(neighbors.begin(), neighbors.end(), comparator);
     }
+
+    void windowedSearch(State &start, int agentId, std::vector<State> &path, int window = 5)
+    {
+        path.clear();
+        using AStarNode_p = std::shared_ptr<AStarNode>;
+        auto compare = [&](AStarNode_p a1, AStarNode_p a2)
+        {
+            if (a1->f != a2->f)
+                return a1->f > a2->f;
+            return a1->cost < a2->cost;
+        };
+
+        std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
+        std::unordered_map<int, AStarNode_p> closed;
+        auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
+        startNode->sid = calcIndex(start);
+        open.push(startNode);
+        int t0 = start.time;
+        while (!open.empty())
+        {
+            auto n = open.top();
+            if (n->state.time >= t0 + window)
+            {
+                auto curr = n;
+                while (curr != nullptr)
+                {
+                    path.push_back(curr->state);
+                    curr = curr->parent;
+                }
+                std::reverse(path.begin(), path.end());
+                return;
+            }
+            double goal_distance =
+                sqrt(pow(n->state.x - getGoal(agentId).x, 2) + pow(n->state.y - getGoal(agentId).y, 2));
+            if (goal_distance <= 3 * (Constants::LB + Constants::LF))
+            {
+                ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
+                OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
+                OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
+                rsStart->setXY(n->state.x, n->state.y);
+                rsStart->setYaw(-n->state.yaw);
+                rsEnd->setXY(getGoal(agentId).x, getGoal(agentId).y);
+                rsEnd->setYaw(-getGoal(agentId).yaw);
+                ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
+                    reedsSheppSpace.reedsShepp(rsStart, rsEnd);
+                std::vector<State> tmp_path;
+                tmp_path.emplace_back(n->state);
+                bool is_solution = true;
+                for (auto pathidx = 0; pathidx < 5; pathidx++)
+                {
+                    if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
+                        continue;
+                    double deltat = 0, dx = 0, act = 0, cost = 0;
+                    switch (reedsShepppath.type_[pathidx])
+                    {
+                    case 0: // RS_NOP
+                        continue;
+                        break;
+                    case 1: // RS_LEFT
+                        deltat = -reedsShepppath.length_[pathidx];
+                        dx = Constants::r * sin(-deltat);
+                        // dy = Constants::r * (1 - cos(-deltat));
+                        act = 2;
+                        cost = reedsShepppath.length_[pathidx] * Constants::r *
+                               Constants::penaltyTurning;
+                        break;
+                    case 2: // RS_STRAIGHT
+                        deltat = 0;
+                        dx = reedsShepppath.length_[pathidx] * Constants::r;
+                        // dy = 0;
+                        act = 0;
+                        cost = dx;
+                        break;
+                    case 3: // RS_RIGHT
+                        deltat = reedsShepppath.length_[pathidx];
+                        dx = Constants::r * sin(deltat);
+                        // dy = -Constants::r * (1 - cos(deltat));
+                        act = 1;
+                        cost = reedsShepppath.length_[pathidx] * Constants::r *
+                               Constants::penaltyTurning;
+                        break;
+                    default:
+                        std::cout << "\033[1m\033[31m"
+                                  << "Warning: Receive unknown ReedsSheppPath type"
+                                  << "\033[0m\n";
+                        break;
+                    }
+                    if (cost < 0)
+                    {
+                        cost = -cost * Constants::penaltyReversing;
+                        act = act + 3;
+                    }
+                    State s = tmp_path.back();
+                    std::vector<std::pair<State, double>> next_path;
+
+                    if (generatePath(s, act, deltat, dx, next_path))
+                    {
+                        for (auto iter = next_path.begin(); iter != next_path.end(); iter++)
+                        {
+                            State next_s = iter->first;
+                            path.emplace_back(next_s);
+                        }
+                    }
+                    else
+                    {
+                        is_solution = false;
+                        break;
+                    }
+                }
+                if (is_solution)
+                {
+                    auto curr = n;
+                    while (curr != nullptr)
+                    {
+                        path.push_back(curr->state);
+                        curr = curr->parent;
+                    }
+                    std::reverse(path.begin(), path.end());
+                    for (int k = 1; k < tmp_path.size(); k++)
+                    {
+                        if (tmp_path[k].time > t0 + window)
+                            break;
+                        path.push_back(tmp_path[k]);
+                    }
+                    return;
+                }
+            }
+
+            closed[n->sid] = n;
+            open.pop();
+            std::vector<Neighbor<State, Action, double>> neighbors;
+            getNeighbors(n->state, n->act, neighbors, agentId);
+            for (auto &nbr : neighbors)
+            {
+
+                int cid = calcIndex(nbr.state);
+                double g = n->cost + nbr.cost;
+                if (closed.find(cid) != closed.end())
+                {
+                    if (closed[cid]->cost > g)
+                    {
+                        closed.erase(cid);
+                    }
+                    else
+                        continue;
+                }
+                double h = admissibleHeuristic(nbr.state, agentId);
+                auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
+                child->sid = cid;
+                open.push(child);
+            }
+        }
+        return;
+    }
+
+    void getNearByAgents(int x, int y, std::vector<State> &agents)
+    {
+        // todo
+    }
+
+    void getNearByObstacles(int x, int y, std::vector<State> &onstacles)
+    {
+        // todo
+    }
+
+    void updateAgentsOccupancy(std::vector<State> &currentStates)
+    {
+        // todo
+        size_t num_agents = getNumAgents();
+        agent_occupancy = std::unordered_map<int, std::vector<int>>();
+        for (int k = 0; k < num_agents; k++)
+        {
+            int vid = getStateId(currentStates[k]);
+            if(agent_occupancy.find(vid)==agent_occupancy.end()){
+                agent_occupancy[vid]=std::vector<int>();
+            }
+            agent_occupancy[vid].emplace_back(k);
+        }
+    }
+
+
+    // void insert
 };
-
-void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
-                      std::vector<State> &startStates,
-                      std::vector<State> &goals,
-                      std::unordered_set<Location> &obstacles)
-{
-
-    YAML::Node map_config;
-    try
-    {
-        map_config = YAML::LoadFile(inputFile);
-    }
-    catch (std::exception &e)
-    {
-        std::cerr << "\033[1m\033[31mERROR: Failed to load map file: " << inputFile
-                  << "\033[0m \n";
-        exit(0);
-    }
-    const auto &dim = map_config["map"]["dimensions"];
-    dimx = dim[0].as<size_t>();
-    dimy = dim[1].as<size_t>();
-
-    std::cout << "dimx=" << dimx << "      dimy=" << dimy << std::endl;
-    for (const auto &node : map_config["map"]["obstacles"])
-    {
-        obstacles.insert(Location(node[0].as<double>(), node[1].as<double>()));
-    }
-    for (const auto &node : map_config["agents"])
-    {
-        const auto &start = node["start"];
-        const auto &goal = node["goal"];
-        startStates.emplace_back(State(start[0].as<double>(), start[1].as<double>(),
-                                       start[2].as<double>()));
-        // std::cout << "s: " << startStates.back() << std::endl;
-        goals.emplace_back(State(goal[0].as<double>(), goal[1].as<double>(),
-                                 goal[2].as<double>()));
-    }
-}
-
-void dumpOutputToYaml(std::string outputFile, std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
-{
-    double makespan = 0, flowtime = 0, cost = 0;
-    for (const auto &s : solution)
-        cost += s.cost;
-
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        // calculate makespan
-        double current_makespan = 0;
-        for (size_t i = 0; i < solution[a].actions.size(); ++i)
-        {
-            // some action cost have penalty coefficient
-
-            if (solution[a].actions[i].second < Constants::dx[0])
-                current_makespan += solution[a].actions[i].second;
-            else if (solution[a].actions[i].first % 3 == 0)
-                current_makespan += Constants::dx[0];
-            else
-                current_makespan += Constants::r * Constants::deltat;
-        }
-        flowtime += current_makespan;
-        if (current_makespan > makespan)
-            makespan = current_makespan;
-    }
-    std::cout << " Runtime: " << timer << std::endl
-              << " Makespan:" << makespan << std::endl
-              << " Flowtime:" << flowtime << std::endl
-              << " cost:" << cost << std::endl;
-    std::ofstream out;
-    out = std::ofstream(outputFile);
-    // output to file
-    out << "statistics:" << std::endl;
-    out << "  cost: " << cost << std::endl;
-    out << "  makespan: " << makespan << std::endl;
-    out << "  flowtime: " << flowtime << std::endl;
-    out << "  runtime: " << timer << std::endl;
-    out << "schedule:" << std::endl;
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        out << "  agent" << a << ":" << std::endl;
-        for (const auto &state : solution[a].states)
-        {
-            out << "    - x: " << state.first.x << std::endl
-                << "      y: " << state.first.y << std::endl
-                << "      yaw: " << state.first.yaw << std::endl
-                << "      t: " << state.first.time << std::endl;
-        }
-    }
-}
-
-void dumpOutputToJson(std::string outputFile,
-                      std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
-{
-    double makespan = 0, flowtime = 0, cost = 0;
-    for (const auto &s : solution)
-        cost += s.cost;
-
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        // calculate makespan
-        double current_makespan = 0;
-        for (size_t i = 0; i < solution[a].actions.size(); ++i)
-        {
-            // some action cost have penalty coefficient
-
-            if (solution[a].actions[i].second < Constants::dx[0])
-                current_makespan += solution[a].actions[i].second;
-            else if (solution[a].actions[i].first % 3 == 0)
-                current_makespan += Constants::dx[0];
-            else
-                current_makespan += Constants::r * Constants::deltat;
-        }
-        flowtime += current_makespan;
-        if (current_makespan > makespan)
-            makespan = current_makespan;
-    }
-
-    nlohmann::json output;
-    // Add statistics data to the JSON object
-    output["cost"] = cost;
-    output["makespan"] = makespan;
-    output["flowtime"] = flowtime;
-    output["runtime"] = timer;
-    std::vector<std::vector<std::vector<double>>> paths;
-    std::cout << "solution size=" << solution.size() << std::endl;
-    // Add schedule data to the JSON object
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        // nlohmann::json agentData;
-        std::vector<std::vector<double>> path;
-        for (const auto &state : solution[a].states)
-        {
-            path.push_back({state.first.x, state.first.y, state.first.yaw});
-        }
-        paths.push_back(path);
-    }
-    output["paths"] = paths;
-
-    // Save the JSON data to a file
-    std::ofstream file(outputFile);
-    if (file.is_open())
-    {
-        file << std::setw(4) << output << std::endl;
-        file.close();
-        std::cout << "JSON data saved successfully." << std::endl;
-    }
-    else
-    {
-        std::cerr << "Error opening file." << std::endl;
-    }
-}
-
-int main(int argc, char *argv[])
-{
-
-    namespace po = boost::program_options;
-    // Declare the supported options.
-    po::options_description desc("Allowed options");
-    std::string inputFile;
-    std::string outputFile;
-    desc.add_options()("help", "produce help message")(
-        "input,i", po::value<std::string>(&inputFile)->required(),
-        "input file (YAML)")("output,o",
-                             po::value<std::string>(&outputFile)->required(),
-                             "output file (YAML)");
-
-    try
-    {
-        po::variables_map vm;
-        po::store(po::parse_command_line(argc, argv, desc), vm);
-        po::notify(vm);
-
-        if (vm.count("help") != 0u)
-        {
-            std::cout << desc << "\n";
-            return 0;
-        }
-    }
-    catch (po::error &e)
-    {
-        std::cerr << e.what() << std::endl
-                  << std::endl;
-        std::cerr << desc << std::endl;
-        return 1;
-    }
-
-    size_t dimx, dimy;
-    std::unordered_set<Location> obstacles;
-    // std::multimap<int, State> dynamic_obstacles;
-    std::vector<State> goals;
-    std::vector<State> startStates;
-    readMapsFromYaml(inputFile, dimx, dimy, startStates, goals, obstacles);
-    Environment mapf(dimx, dimy, obstacles, goals);
-
-    std::vector<PlanResult<State, Action, double>> solution;
-    bool success = false;
-    Timer iterTimer;
-    PIBT<State, Action, double, Environment> pibt(mapf, startStates);
-    pibt.PIBT_solve();
-    solution = pibt.getSolution();
-    dumpOutputToYaml(outputFile, solution, 0);
-
-    return 0;
-}

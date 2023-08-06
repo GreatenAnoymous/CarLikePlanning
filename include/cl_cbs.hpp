@@ -14,7 +14,7 @@
 
 #include "hybrid_astar.hpp"
 
-#define MAX_RUNTIME 120
+#define MAX_RUNTIME 60
 
 namespace libMultiRobotPlanning {
 /*!

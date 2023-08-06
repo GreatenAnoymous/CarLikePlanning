@@ -32,14 +32,18 @@ namespace Constants
     // primitives < 3 to primitives > 2)
     static float penaltyCOD = 2.0;
 
-    static float oneStepWeight=0.3;
+    static float oneStepWeight = 0.3;
     //
-    static float penaltyWait=6.0;
+    static float penaltyWait = 1.0;
     // map resolution
     static float mapResolution = 2.0;
     // change to set calcIndex resolution
     static float xyResolution = r * deltat;
     static float yawResolution = deltat;
+
+    static float greedyBonus = 1.0;
+
+    static float gammaHistory = 0.95;
 
     // width of car
     static float carWidth = 2.0;
@@ -51,6 +55,8 @@ namespace Constants
     static float obsRadius = 1;
     // least time to wait for constraint
     static int constraintWaitTime = 2;
+
+    static double BSTIEBREAKER = 1e-3;
 
     // R = 3, 6.75 DEG
     std::vector<double> dyaw = {0, deltat, -deltat, 0, -deltat, deltat};
@@ -71,15 +77,14 @@ namespace Constants
     }
 } // namespace Constants
 
-
 namespace libMultiRobotPlanning
 {
 
-  using libMultiRobotPlanning::Neighbor;
-  using libMultiRobotPlanning::PlanResult;
-  using namespace libMultiRobotPlanning;
-  typedef ompl::base::SE2StateSpace::StateType OmplState;
-  typedef boost::geometry::model::d2::point_xy<double> Point;
-  typedef boost::geometry::model::segment<Point> Segment;
+    using libMultiRobotPlanning::Neighbor;
+    using libMultiRobotPlanning::PlanResult;
+    using namespace libMultiRobotPlanning;
+    typedef ompl::base::SE2StateSpace::StateType OmplState;
+    typedef boost::geometry::model::d2::point_xy<double> Point;
+    typedef boost::geometry::model::segment<Point> Segment;
 
 }

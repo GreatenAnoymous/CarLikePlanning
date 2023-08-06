@@ -57,13 +57,7 @@ class Animation:
         # self.ax.relim()
         plt.xlim(xmin, xmax)
         plt.ylim(ymin, ymax)
-        # plt.xlim(10, 20)
-        # plt.ylim(10, 20)
-        # self.ax.set_xticks([])
-        # self.ax.set_yticks([])
-        # plt.axis('off')
-        # self.ax.axis('tight')
-        self.ax.axis('off')
+        # self.ax.axis('off')
 
         self.patches.append(Rectangle(
             (xmin, ymin), xmax - xmin, ymax - ymin, facecolor='none', edgecolor='red'))
@@ -117,6 +111,8 @@ class Animation:
                                             interval=100,
                                             repeat=False,
                                             blit=True)
+
+        # self.anim.save('./demo_obs_stuck.mp4',fps=10)
 
     def save(self, file_name, speed):
         self.anim.save(
