@@ -651,6 +651,8 @@ private:
         return;
     }
 
+    
+
     void windowedSearch(State &start, Action action, int agentId, Neighbor<State, Action, double> &next, int window = 25)
     {
         double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));

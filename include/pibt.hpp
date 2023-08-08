@@ -13,7 +13,7 @@
 #include <cassert>
 #include <iostream>
 #include <cmath>
-#define DEBUG_ENABLE 1
+#define DEBUG_ENABLE 0
 #define COLLISION_RANGE 8
 
 namespace libMultiRobotPlanning
@@ -29,7 +29,7 @@ namespace libMultiRobotPlanning
         std::vector<size_t> undecided;
         std::unordered_set<size_t> undecided_set;
         std::vector<std::vector<size_t>> nearby_agents;
-        std::vector<std::vector<Neighbor<State,Action,Cost>>> greedy_paths;
+        std::vector<std::vector<Neighbor<State, Action, Cost>>> greedy_paths;
 
         std::vector<State> currentStates;
         std::vector<State> lastStates;
@@ -114,13 +114,59 @@ namespace libMultiRobotPlanning
             }
         }
 
-        void addGreedyNeighbor(size_t agentId,std::vector<Neighbor<State, Action, double>> &neighbors){
-            if(greedy_paths.empty()==false){
-                auto nbr=greedy_paths[agentId];
-                for(auto it=neighbors.begin();it!=neighbors.end();it++){
-                    
+        void addGreedyNeighbor(size_t agentId, std::vector<Neighbor<State, Action, double>> &neighbors)
+        {
+            if (greedy_paths.empty() == false)
+            {
+                auto nbr = greedy_paths[agentId];
+                for (auto it = neighbors.begin(); it != neighbors.end(); it++)
+                {
+                    if (it->state == nbr.state)
+                    {
+                        neighbors.erase(it);
+                        break;
+                    }
                 }
+                nbr.state.greedy = 1;
+                neighbors.push_back(nbr);
+            }
+        }
 
+        void moveRobot(size_t agentId, Neighbor<State, Action, Cost> &nbr)
+        {
+            nextPlan[agentId] = nbr.state;
+            m_env.updateHistory(agentId, nbr.state);
+            solution[agentId].states.push_back({nbr.state, nbr.cost});
+            solution[agentId].actions.push_back({nbr.action, nbr.cost});
+            solution[agentId].cost += nbr.cost;
+            lastActions[agentId] = nbr.action;
+            if (nbr.state.greedy == 1)
+            {
+                greedy_paths.pop_back();
+            }
+            else
+            {
+                auto curr = currentStates[agentId];
+                auto act = nbr.action;
+                if (act < 3)
+                    act += 3;
+                if (act >= 3 and act <= 5)
+                    act -= 3;
+                auto g = Constants::dx[0];
+                if (act % 3 != 0)
+                { // penalize turning
+                    g = g * Constants::penaltyTurning;
+                }
+                if ((act < 3 && nbr.action >= 3) || (nbr.action < 3 && act >= 3))
+                {
+                    // penalize change of direction
+                    g = g * Constants::penaltyCOD;
+                }
+                if (act >= 3)
+                { // backwards
+                    g = g * Constants::penaltyReversing;
+                }
+                greedy_paths.push_back(Neighbor<State, Action, Cost>(curr, act, g));
             }
         }
 
