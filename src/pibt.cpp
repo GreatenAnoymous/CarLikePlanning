@@ -362,6 +362,8 @@ public:
         neighbors.push_back(next);
     }
 
+
+
     void addGoalToNeighborIfClose(State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors, int agent)
     {
         // check if the s is close enough to the goal state, if so, add the goal state to neighbors
@@ -500,12 +502,162 @@ private:
         return true;
     }
 
+    void singleRobotPathPlanning(State &start, Action action, int agentId, std::vector<Neighbor<State, Action, double>> &path)
+    {
+        path.clear();
+        double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));
+        if (goal_distance < 1e-1)
+        {
+            Neighbor<State, Action, double> next(getGoal(agentId), 0, 1);
+            next.state.time = start.time + 1;
+            path.push_back(next);
+            return;
+        }
+        using AStarNode_p = std::shared_ptr<AStarNode>;
+        auto compare = [&](AStarNode_p a1, AStarNode_p a2)
+        {
+            if (a1->f != a2->f)
+                return a1->f > a2->f;
+            return a1->cost < a2->cost;
+        };
+
+        std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
+        std::unordered_map<int, AStarNode_p> closed;
+        auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
+        startNode->sid = calcIndex(start);
+        startNode->act = action;
+        open.push(startNode);
+        int t0 = start.time;
+        while (!open.empty())
+        {
+            auto n = open.top();
+            double goal_distance =
+                sqrt(pow(n->state.x - getGoal(agentId).x, 2) + pow(n->state.y - getGoal(agentId).y, 2));
+            if (goal_distance <= 3 * (Constants::LB + Constants::LF))
+            {
+                ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
+                OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
+                OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
+                rsStart->setXY(n->state.x, n->state.y);
+                rsStart->setYaw(-n->state.yaw);
+                rsEnd->setXY(getGoal(agentId).x, getGoal(agentId).y);
+                rsEnd->setYaw(-getGoal(agentId).yaw);
+                ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
+                    reedsSheppSpace.reedsShepp(rsStart, rsEnd);
+                double gScore = n->cost;
+                std::vector<State> tmp_path;
+                tmp_path.emplace_back(n->state);
+                bool is_solution = true;
+                for (auto pathidx = 0; pathidx < 5; pathidx++)
+                {
+                    if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
+                        continue;
+                    double deltat = 0, dx = 0, act = 0, cost = 0;
+                    switch (reedsShepppath.type_[pathidx])
+                    {
+                    case 0: // RS_NOP
+                        continue;
+                        break;
+                    case 1: // RS_LEFT
+                        deltat = -reedsShepppath.length_[pathidx];
+                        dx = Constants::r * sin(-deltat);
+                        // dy = Constants::r * (1 - cos(-deltat));
+                        act = 2;
+                        cost = reedsShepppath.length_[pathidx] * Constants::r *
+                               Constants::penaltyTurning;
+                        break;
+                    case 2: // RS_STRAIGHT
+                        deltat = 0;
+                        dx = reedsShepppath.length_[pathidx] * Constants::r;
+                        // dy = 0;
+                        act = 0;
+                        cost = dx;
+                        break;
+                    case 3: // RS_RIGHT
+                        deltat = reedsShepppath.length_[pathidx];
+                        dx = Constants::r * sin(deltat);
+                        // dy = -Constants::r * (1 - cos(deltat));
+                        act = 1;
+                        cost = reedsShepppath.length_[pathidx] * Constants::r *
+                               Constants::penaltyTurning;
+                        break;
+                    default:
+                        std::cout << "\033[1m\033[31m"
+                                  << "Warning: Receive unknown ReedsSheppPath type"
+                                  << "\033[0m\n";
+                        break;
+                    }
+                    if (cost < 0)
+                    {
+                        cost = -cost * Constants::penaltyReversing;
+                        act = act + 3;
+                    }
+                    State s = tmp_path.back();
+                    std::vector<std::pair<State, double>> next_path;
+
+                    if (generatePath(s, act, deltat, dx, next_path))
+                    {
+                        for (auto iter = next_path.begin(); iter != next_path.end(); iter++)
+                        {
+                            State next_s = iter->first;
+                            gScore += iter->second;
+                            if (!(next_s == tmp_path.back()))
+                            {
+                                auto child = std::make_shared<AStarNode>(next_s, gScore, gScore, act, n);
+                                n = child;
+                            }
+                            tmp_path.emplace_back(next_s);
+                        }
+                    }
+                    else
+                    {
+                        is_solution = false;
+                        break;
+                    }
+                }
+                if (is_solution)
+                {
+                    while (n->parent != nullptr)
+                    {
+                        path.emplace_back(Neighbor<State, Action, double>(n->state, n->act, n->cost));
+                        n = n->parent;
+                    }
+                    return;
+                }
+            }
+
+            closed[n->sid] = n;
+            open.pop();
+            std::vector<Neighbor<State, Action, double>> neighbors;
+            getNeighbors(n->state, n->act, neighbors, agentId);
+            for (auto &nbr : neighbors)
+            {
+
+                int cid = calcIndex(nbr.state);
+                double g = n->cost + nbr.cost;
+                if (closed.find(cid) != closed.end())
+                {
+                    if (closed[cid]->cost < g)
+                    {
+                        continue;
+                    }
+                }
+                double h = admissibleHeuristic(nbr.state, agentId);
+                auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
+                child->sid = cid;
+                open.push(child);
+            }
+        }
+        return;
+    }
+
     void windowedSearch(State &start, Action action, int agentId, Neighbor<State, Action, double> &next, int window = 25)
     {
         double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));
         if (goal_distance < 1e-1)
         {
             next.state = getGoal(agentId);
+            next.state.time = start.time + 1;
             next.cost = 0;
             next.action = 1;
             return;

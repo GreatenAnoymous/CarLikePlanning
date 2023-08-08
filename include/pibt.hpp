@@ -29,6 +29,7 @@ namespace libMultiRobotPlanning
         std::vector<size_t> undecided;
         std::unordered_set<size_t> undecided_set;
         std::vector<std::vector<size_t>> nearby_agents;
+        std::vector<std::vector<Neighbor<State,Action,Cost>>> greedy_paths;
 
         std::vector<State> currentStates;
         std::vector<State> lastStates;
@@ -110,6 +111,16 @@ namespace libMultiRobotPlanning
                         nearby_agents[j].push_back(i);
                     }
                 }
+            }
+        }
+
+        void addGreedyNeighbor(size_t agentId,std::vector<Neighbor<State, Action, double>> &neighbors){
+            if(greedy_paths.empty()==false){
+                auto nbr=greedy_paths[agentId];
+                for(auto it=neighbors.begin();it!=neighbors.end();it++){
+                    
+                }
+
             }
         }
 
