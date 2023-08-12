@@ -354,6 +354,145 @@ void readAgentConfig()
                        0, -Constants::deltat, Constants::deltat};
 }
 
+void readMapsFromJson(std::string inputFile, size_t &xmax, size_t &ymax,
+                      std::vector<State> &starts,
+                      std::vector<State> &goals,
+                      std::unordered_set<Location> &obstacles)
+{
+    std::ifstream file(inputFile);
+    if (!file.is_open())
+    {
+        std::cerr << "Error opening file: " << inputFile << std::endl;
+        return;
+    }
+
+    // Parse the JSON data
+    nlohmann::json data;
+    try
+    {
+        file >> data;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error parsing JSON: " << e.what() << std::endl;
+        file.close();
+        return;
+    }
+
+    // std::vector<std::vector<double>> obstacle_vec;
+    // std::vector<std::vector<double>>  start_vec;
+    // std::vector<std::vector<std::vector<double>>> goal_vec;
+    // Extract data from JSON
+    try
+    {
+        xmax = data["xmax"];
+        ymax = data["ymax"];
+
+        // Read obstacles
+        if (data.count("obstacles") > 0)
+        {
+            for (const auto &obstacle : data["obstacles"])
+            {
+                std::vector<double> obstacleCoords = obstacle;
+                // obstacle_vec.push_back(obstacleCoords);
+                obstacles.insert(Location(obstacleCoords[0], obstacleCoords[1]));
+            }
+        }
+
+        // Read starts
+        if (data.count("starts") > 0)
+        {
+            std::cout << "starts size=" << data["starts"].size() << std::endl;
+            for (const auto &svec : data["starts"])
+            {
+                // obstacle_vec.push_back(obstacleCoords);
+                starts.push_back(State(svec[0], svec[1], svec[2]));
+            }
+        }
+
+        // Read goals
+        if (data.count("goals") > 0)
+        {
+            for (const auto &goal : data["goals"])
+            {
+                // obstacle_vec.push_back(obstacleCoords);
+                goals.push_back(State(goal[0], goal[1], goal[2]));
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error extracting data from JSON: " << e.what() << std::endl;
+    }
+
+    // Close the file
+    file.close();
+}
+
+void dumpOutputToJson(std::string outputFile,
+                      std::vector<PlanResult<State, Action, double>> &solution, double timer = 0, bool savepath = false)
+{
+    double makespan = 0, flowtime = 0, cost = 0;
+    for (const auto &s : solution)
+        cost += s.cost;
+
+    for (size_t a = 0; a < solution.size(); ++a)
+    {
+        // calculate makespan
+        double current_makespan = 0;
+        for (size_t i = 0; i < solution[a].actions.size(); ++i)
+        {
+            // some action cost have penalty coefficient
+
+            if (solution[a].actions[i].second < Constants::dx[0])
+                current_makespan += solution[a].actions[i].second;
+            else if (solution[a].actions[i].first % 3 == 0)
+                current_makespan += Constants::dx[0];
+            else
+                current_makespan += Constants::r * Constants::deltat;
+        }
+        flowtime += current_makespan;
+        if (current_makespan > makespan)
+            makespan = current_makespan;
+    }
+
+    nlohmann::json output;
+    // Add statistics data to the JSON object
+    output["cost"] = cost;
+    output["makespan"] = makespan;
+    output["flowtime"] = flowtime;
+    output["runtime"] = timer;
+    std::vector<std::vector<std::vector<double>>> paths;
+    std::cout << "solution size=" << solution.size() << std::endl;
+    // Add schedule data to the JSON object
+    if (savepath)
+    {
+        for (size_t a = 0; a < solution.size(); ++a)
+        {
+            // nlohmann::json agentData;
+            std::vector<std::vector<double>> path;
+            for (const auto &state : solution[a].states)
+            {
+                path.push_back({state.first.x, state.first.y, state.first.yaw});
+            }
+            paths.push_back(path);
+        }
+        output["paths"] = paths;
+    }
+    // Save the JSON data to a file
+    std::ofstream file(outputFile);
+    if (file.is_open())
+    {
+        file << std::setw(4) << output << std::endl;
+        file.close();
+        std::cout << "JSON data saved successfully." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Error opening file." << std::endl;
+    }
+}
+
 int CBS_exe(int argc, char *argv[])
 {
     namespace po = boost::program_options;
@@ -392,159 +531,33 @@ int CBS_exe(int argc, char *argv[])
 
     readAgentConfig();
 
-    YAML::Node map_config;
-    try
-    {
-        map_config = YAML::LoadFile(inputFile);
-    }
-    catch (std::exception &e)
-    {
-        std::cerr << "\033[1m\033[31mERROR: Failed to load map file: " << inputFile
-                  << "\033[0m \n";
-        return 0;
-    }
-    const auto &dim = map_config["map"]["dimensions"];
-    int dimx = dim[0].as<int>();
-    int dimy = dim[1].as<int>();
+    size_t dimx, dimy;
 
     std::unordered_set<Location> obstacles;
     std::multimap<int, State> dynamic_obstacles;
     std::vector<State> goals;
     std::vector<State> startStates;
-    for (const auto &node : map_config["map"]["obstacles"])
-    {
-        obstacles.insert(Location(node[0].as<double>(), node[1].as<double>()));
-    }
-    for (const auto &node : map_config["agents"])
-    {
-        const auto &start = node["start"];
-        const auto &goal = node["goal"];
-        startStates.emplace_back(State(start[0].as<double>(), start[1].as<double>(),
-                                       start[2].as<double>()));
-        // std::cout << "s: " << startStates.back() << std::endl;
-        goals.emplace_back(State(goal[0].as<double>(), goal[1].as<double>(),
-                                 goal[2].as<double>()));
-    }
-
+    readMapsFromJson(inputFile, dimx, dimy, startStates, goals, obstacles);
     std::cout << "Calculating Solution...\n";
     double timer = 0;
-    bool success = false;
+
+    Environment<Location, State, Action, double, Conflict, Constraint,
+                Constraints>
+        mapf(dimx, dimy, obstacles, dynamic_obstacles, goals);
+
+    CL_CBS<State, Action, double, Conflict, Constraints,
+           Environment<Location, State, Action, double, Conflict, Constraint,
+                       Constraints>>
+        cbsHybrid(mapf);
     std::vector<PlanResult<State, Action, double>> solution;
-    for (size_t iter = 0; iter < (double)goals.size() / batchSize; iter++)
-    {
-        size_t first = iter * batchSize;
-        size_t last = first + batchSize;
-        if (last >= goals.size())
-            last = goals.size();
-        std::vector<State> m_goals(goals.begin() + first, goals.begin() + last);
-        std::vector<State> m_starts(startStates.begin() + first,
-                                    startStates.begin() + last);
-
-        Environment<Location, State, Action, double, Conflict, Constraint,
-                    Constraints>
-            mapf(dimx, dimy, obstacles, dynamic_obstacles, m_goals);
-        if (!mapf.startAndGoalValid(m_starts, iter, batchSize))
-        {
-            success = false;
-            break;
-        }
-        for (auto goal = goals.begin() + last; goal != goals.end(); goal++)
-        {
-            dynamic_obstacles.insert(
-                std::pair<int, State>(-1, State(goal->x, goal->y, goal->yaw)));
-        }
-        CL_CBS<State, Action, double, Conflict, Constraints,
-               Environment<Location, State, Action, double, Conflict, Constraint,
-                           Constraints>>
-            cbsHybrid(mapf);
-        std::vector<PlanResult<State, Action, double>> m_solution;
-        Timer iterTimer;
-        success = cbsHybrid.search(m_starts, m_solution);
-        iterTimer.stop();
-
-        if (!success)
-        {
-            std::cout << "\033[1m\033[31m No." << iter
-                      << "iter fail to find a solution \033[0m\n";
-            break;
-        }
-        else
-        {
-            solution.insert(solution.end(), m_solution.begin(), m_solution.end());
-            for (size_t a = 0; a < m_solution.size(); ++a)
-            {
-                for (const auto &state : m_solution[a].states)
-                    dynamic_obstacles.insert(std::pair<int, State>(
-                        state.first.time,
-                        State(state.first.x, state.first.y, state.first.yaw)));
-                State lastState = m_solution[a].states.back().first;
-                dynamic_obstacles.insert(std::pair<int, State>(
-                    -lastState.time, State(lastState.x, lastState.y, lastState.yaw)));
-            }
-            timer += iterTimer.elapsedSeconds();
-            std::cout << "Complete " << iter
-                      << " iter. Runtime:" << iterTimer.elapsedSeconds()
-                      << " Expand high-level nodes:" << mapf.highLevelExpanded()
-                      << " Average Low-level-search time:"
-                      << iterTimer.elapsedSeconds() / mapf.highLevelExpanded() /
-                             m_goals.size()
-                      << std::endl;
-        }
-        dynamic_obstacles.erase(-1);
-    }
-
-    std::ofstream out;
-    out = std::ofstream(outputFile);
-
+    Timer iterTimer;
+    bool success = cbsHybrid.search(startStates, solution);
+    iterTimer.stop();
+    timer=iterTimer.elapsedSeconds();
     if (success)
     {
         std::cout << "\033[1m\033[32m Successfully find solution! \033[0m\n";
-
-        double makespan = 0, flowtime = 0, cost = 0;
-        for (const auto &s : solution)
-            cost += s.cost;
-
-        for (size_t a = 0; a < solution.size(); ++a)
-        {
-            // calculate makespan
-            double current_makespan = 0;
-            for (size_t i = 0; i < solution[a].actions.size(); ++i)
-            {
-                // some action cost have penalty coefficient
-
-                if (solution[a].actions[i].second < Constants::dx[0])
-                    current_makespan += solution[a].actions[i].second;
-                else if (solution[a].actions[i].first % 3 == 0)
-                    current_makespan += Constants::dx[0];
-                else
-                    current_makespan += Constants::r * Constants::deltat;
-            }
-            flowtime += current_makespan;
-            if (current_makespan > makespan)
-                makespan = current_makespan;
-        }
-        std::cout << " Runtime: " << timer << std::endl
-                  << " Makespan:" << makespan << std::endl
-                  << " Flowtime:" << flowtime << std::endl
-                  << " cost:" << cost << std::endl;
-        // output to file
-        out << "statistics:" << std::endl;
-        out << "  cost: " << cost << std::endl;
-        out << "  makespan: " << makespan << std::endl;
-        out << "  flowtime: " << flowtime << std::endl;
-        out << "  runtime: " << timer << std::endl;
-        out << "schedule:" << std::endl;
-        for (size_t a = 0; a < solution.size(); ++a)
-        {
-            out << "  agent" << a << ":" << std::endl;
-            for (const auto &state : solution[a].states)
-            {
-                out << "    - x: " << state.first.x << std::endl
-                    << "      y: " << state.first.y << std::endl
-                    << "      yaw: " << state.first.yaw << std::endl
-                    << "      t: " << state.first.time << std::endl;
-            }
-        }
+        dumpOutputToJson(outputFile, solution, timer);
     }
     else
     {
@@ -552,129 +565,11 @@ int CBS_exe(int argc, char *argv[])
     }
 }
 
-void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
-                      std::vector<State> &startStates,
-                      std::vector<State> &goals,
-                      std::unordered_set<Location> &obstacles)
-{
 
-    YAML::Node map_config;
-    try
-    {
-        map_config = YAML::LoadFile(inputFile);
-    }
-    catch (std::exception &e)
-    {
-        std::cerr << "\033[1m\033[31mERROR: Failed to load map file: " << inputFile
-                  << "\033[0m \n";
-        exit(0);
-    }
-    const auto &dim = map_config["map"]["dimensions"];
-    dimx = dim[0].as<size_t>();
-    dimy = dim[1].as<size_t>();
-
-    for (const auto &node : map_config["map"]["obstacles"])
-    {
-        obstacles.insert(Location(node[0].as<double>(), node[1].as<double>()));
-    }
-    for (const auto &node : map_config["agents"])
-    {
-        const auto &start = node["start"];
-        const auto &goal = node["goal"];
-        startStates.emplace_back(State(start[0].as<double>(), start[1].as<double>(),
-                                       start[2].as<double>()));
-        // std::cout << "s: " << startStates.back() << std::endl;
-        goals.emplace_back(State(goal[0].as<double>(), goal[1].as<double>(),
-                                 goal[2].as<double>()));
-    }
-}
-
-void eval()
-{
-    std::string data_file = "./data/cbs.csv";
-    std::string input_folder = "./benchmark/map50by50/";
-
-    std::string obs = "empty";
-    std::vector<int> num_agents = {5, 10, 15, 20};
-    int num_instances = 50;
-    std::ofstream out(data_file);
-    out << "num_robots,makespan,cost,runtime,success_rate" << std::endl;
-    for (auto n : num_agents)
-    {
-        double makespan_sum = 0;
-        double cost_sum = 0;
-        double runtime_sum = 0;
-        double succ_sum = 0;
-
-        std::string instance_prefix = input_folder + "agents" + std::to_string(n) + "/" + obs + "/" + "map_50by50_obst0_agents" + std::to_string(n) + "_ex";
-        for (int k = 0; k < num_instances; k++)
-        {
-            std::string instance = instance_prefix + std::to_string(k) + ".yaml";
-            std::cout << instance << std::endl;
-            size_t dimx, dimy;
-            std::unordered_set<Location> obstacles;
-            // std::multimap<int, State> dynamic_obstacles;
-            std::vector<State> goals;
-            std::vector<State> startStates;
-            std::multimap<int, State> dynamic_obstacles;
-
-            readMapsFromYaml(instance, dimx, dimy, startStates, goals, obstacles);
-            // std::cout << startStates.size() << "   " << goals.size() << std::endl;
-            Environment<Location, State, Action, double, Conflict, Constraint,
-                        Constraints>
-                mapf(dimx, dimy, obstacles, dynamic_obstacles, goals);
-
-            CL_CBS<State, Action, double, Conflict, Constraints,
-                   Environment<Location, State, Action, double, Conflict, Constraint,
-                               Constraints>>
-                cbsHybrid(mapf);
-            std::vector<PlanResult<State, Action, double>> solution;
-            Timer iterTimer;
-            bool success = cbsHybrid.search(startStates, solution);
-            iterTimer.stop();
-            if (success)
-            {
-                double makespan = 0, flowtime = 0, cost = 0;
-                succ_sum++;
-                for (const auto &s : solution)
-                    cost += s.cost;
-                for (size_t a = 0; a < solution.size(); ++a)
-                {
-                    // calculate makespan
-                    double current_makespan = 0;
-                    for (size_t i = 0; i < solution[a].actions.size(); ++i)
-                    {
-                        // some action cost have penalty coefficient
-
-                        if (solution[a].actions[i].second < Constants::dx[0])
-                            current_makespan += solution[a].actions[i].second;
-                        else if (solution[a].actions[i].first % 3 == 0)
-                            current_makespan += Constants::dx[0];
-                        else
-                            current_makespan += Constants::r * Constants::deltat;
-                    }
-                    flowtime += current_makespan;
-                    if (current_makespan > makespan)
-                        makespan = current_makespan;
-                }
-                makespan_sum += makespan;
-                cost_sum += cost;
-                runtime_sum += iterTimer.elapsedSeconds();
-            }
-        }
-
-        if (succ_sum != 0)
-        {
-            out << std::to_string(n) << "," << std::to_string(makespan_sum / succ_sum)
-                << "," << std::to_string(cost_sum / succ_sum)
-                << "," << std::to_string(runtime_sum / succ_sum)
-                << "," << std::to_string(succ_sum / num_instances) << std::endl;
-        }
-    }
-    out.close();
-}
 
 int main(int argc, char *argv[])
 {
-    eval();
+    // eval();
+    CBS_exe(argc, argv);
+    return 0;
 }

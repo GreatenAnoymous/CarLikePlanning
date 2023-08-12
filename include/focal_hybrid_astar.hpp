@@ -74,7 +74,7 @@ namespace libMultiRobotPlanning
                     }
                 }
                 assert(focalSet.empty() == false);
-                std::cout<<"size of open"<<openSet.size()<<std::endl;
+                // std::cout<<"size of open"<<openSet.size()<<std::endl;
                 auto currentHandle = focalSet.top();
                 auto iter=openSet.begin();
                 for(;iter!=openSet.end();iter++){
@@ -85,7 +85,7 @@ namespace libMultiRobotPlanning
                     continue;
                 }
                 Node current = *currentHandle;
-                std::cout << current << std::endl;
+                // std::cout << current << std::endl;
                 m_env.onExpandNode(current.state, current.fScore, current.gScore);
 
                 // check if it is the solution
@@ -127,7 +127,7 @@ namespace libMultiRobotPlanning
 
            
                 openSet.erase(currentHandle);
-                std::cout << "open set ereased" << std::endl;
+                // std::cout << "open set ereased" << std::endl;
 
                 stateToHeap.erase(m_env.calcIndex(current.state));
                 closedSet.insert(m_env.calcIndex(current.state));
@@ -204,7 +204,7 @@ namespace libMultiRobotPlanning
                                 // }
                                 // if (iter == focalSet.end()){
                                     focalSet.push(handle);
-                                    std::cout << "focalAdd: " << *handle << std::endl;
+                                    // std::cout << "focalAdd: " << *handle << std::endl;
                                 // }
                                     
                             }

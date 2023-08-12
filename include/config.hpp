@@ -17,6 +17,8 @@
 #include "planresult.hpp"
 #include <vector>
 
+
+
 namespace Constants
 {
     // [m] --- The minimum turning radius of the vehicle
@@ -32,6 +34,8 @@ namespace Constants
     // primitives < 3 to primitives > 2)
     static float penaltyCOD = 2.0;
 
+    static float penaltyHeadon=3.0;
+
     static float oneStepWeight = 0.3;
     //
     static float penaltyWait = 1.0;
@@ -43,7 +47,7 @@ namespace Constants
 
     static float greedyBonus = 1.0;
 
-    static float gammaHistory = 0.95;
+    static float gammaHistory = 0.99;
 
     // width of car
     static float carWidth = 2.0;
@@ -57,6 +61,9 @@ namespace Constants
     static int constraintWaitTime = 2;
 
     static double BSTIEBREAKER = 1e-3;
+
+    
+                                                    
 
     // R = 3, 6.75 DEG
     std::vector<double> dyaw = {0, deltat, -deltat, 0, -deltat, deltat};
@@ -75,6 +82,8 @@ namespace Constants
 
         return t - 2.f * M_PI * static_cast<int>(t / (2.f * M_PI));
     }
+
+
 } // namespace Constants
 
 namespace libMultiRobotPlanning

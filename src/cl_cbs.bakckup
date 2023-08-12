@@ -1,19 +1,36 @@
+/**
+ * @file cl_cbs.cpp
+ * @author Licheng Wen (wenlc@zju.edu.cn)
+ * @brief The implement of CL-CBS
+ * @date 2020-11-12
+ *
+ * @copyright Copyright (c) 2020
+ *
+ */
+
+#include "json.hpp"
+#include "cl_cbs.hpp"
+
+#include <sys/stat.h>
+#include <unistd.h>
+#include <yaml-cpp/yaml.h>
+
+#include <boost/functional/hash.hpp>
+#include <boost/numeric/ublas/matrix.hpp>
+#include <boost/program_options.hpp>
 #include <fstream>
 #include <iostream>
-#include "environment.hpp"
-#include "json.hpp"
-#include <boost/functional/hash.hpp>
-#include <boost/program_options.hpp>
-#include <yaml-cpp/yaml.h>
-#include "config.hpp"
-#include "cl_ecbs.hpp"
-#include "timer.hpp"
-#include <boost/numeric/ublas/matrix.hpp>
 
-using libMultiRobotPlanning::ECBS;
-using libMultiRobotPlanning::Environment;
+#include "environment.hpp"
+#include "timer.hpp"
+
+using libMultiRobotPlanning::CL_CBS;
 using libMultiRobotPlanning::Neighbor;
 using libMultiRobotPlanning::PlanResult;
+using namespace libMultiRobotPlanning;
+
+// calculate agent collision more precisely BUT need LONGER time
+// #define PRCISE_COLLISION
 
 struct Location
 {
@@ -140,7 +157,7 @@ struct State
         boost::numeric::ublas::matrix<double> obs(1, 2);
         obs(0, 0) = obstacle.x - this->x;
         obs(0, 1) = obstacle.y - this->y;
-        float safe_factor = 1.1;
+
         auto rotated_obs = boost::numeric::ublas::prod(obs, rot);
         if (rotated_obs(0, 0) > -Constants::LB - Constants::obsRadius &&
             rotated_obs(0, 0) < Constants::LF + Constants::obsRadius &&
@@ -162,7 +179,7 @@ struct State
 
 private:
     boost::numeric::ublas::matrix<double> rot;
-    libMultiRobotPlanning::Point corner1, corner2, corner3, corner4;
+    Point corner1, corner2, corner3, corner4;
 };
 
 namespace std
@@ -183,39 +200,6 @@ namespace std
 } // namespace std
 
 using Action = int; // int<7 int ==6 wait
-///
-// enum class Action
-// {
-//     Up,
-//     Down,
-//     Left,
-//     Right,
-//     Wait,
-// };
-
-// std::ostream &operator<<(std::ostream &os, const Action &a)
-// {
-//     switch (a)
-//     {
-//     case Action::Up:
-//         os << "Up";
-//         break;
-//     case Action::Down:
-//         os << "Down";
-//         break;
-//     case Action::Left:
-//         os << "Left";
-//         break;
-//     case Action::Right:
-//         os << "Right";
-//         break;
-//     case Action::Wait:
-//         os << "Wait";
-//         break;
-//     }
-//     return os;
-// }
-///
 
 struct Conflict
 {
@@ -324,7 +308,7 @@ void readAgentConfig()
 {
     YAML::Node car_config;
     std::string test(__FILE__);
-    boost::replace_all(test, "cl_ecbs.cpp", "config.yaml");
+    boost::replace_all(test, "cl_cbs.cpp", "config.yaml");
     try
     {
         car_config = YAML::LoadFile(test.c_str());
@@ -446,7 +430,7 @@ void readMapsFromJson(std::string inputFile, size_t &xmax, size_t &ymax,
 }
 
 void dumpOutputToJson(std::string outputFile,
-                      std::vector<PlanResult<State, Action, double>> &solution, double timer = 0, bool savepath = false)
+                      std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
 {
     double makespan = 0, flowtime = 0, cost = 0;
     for (const auto &s : solution)
@@ -481,20 +465,18 @@ void dumpOutputToJson(std::string outputFile,
     std::vector<std::vector<std::vector<double>>> paths;
     std::cout << "solution size=" << solution.size() << std::endl;
     // Add schedule data to the JSON object
-    if (savepath)
+    for (size_t a = 0; a < solution.size(); ++a)
     {
-        for (size_t a = 0; a < solution.size(); ++a)
+        // nlohmann::json agentData;
+        std::vector<std::vector<double>> path;
+        for (const auto &state : solution[a].states)
         {
-            // nlohmann::json agentData;
-            std::vector<std::vector<double>> path;
-            for (const auto &state : solution[a].states)
-            {
-                path.push_back({state.first.x, state.first.y, state.first.yaw});
-            }
-            paths.push_back(path);
+            path.push_back({state.first.x, state.first.y, state.first.yaw});
         }
-        output["paths"] = paths;
+        paths.push_back(path);
     }
+    output["paths"] = paths;
+
     // Save the JSON data to a file
     std::ofstream file(outputFile);
     if (file.is_open())
@@ -509,23 +491,21 @@ void dumpOutputToJson(std::string outputFile,
     }
 }
 
-int ECBS_exe(int argc, char *argv[])
+int CBS_exe(int argc, char *argv[])
 {
     namespace po = boost::program_options;
     // Declare the supported options.
     po::options_description desc("Allowed options");
     std::string inputFile;
     std::string outputFile;
-    float w;
     int batchSize;
     desc.add_options()("help", "produce help message")(
         "input,i", po::value<std::string>(&inputFile)->required(),
         "input file (YAML)")("output,o",
                              po::value<std::string>(&outputFile)->required(),
                              "output file (YAML)")(
-        "suboptimality,w", po::value<float>(&w)->default_value(1.0),
-        "suboptimality bound")(
-        "batchsize,b", po::value<int>(&batchSize)->default_value(10), "batch size for iter");
+        "batchsize,b", po::value<int>(&batchSize)->default_value(10),
+        "batch size for iter");
 
     try
     {
@@ -556,56 +536,105 @@ int ECBS_exe(int argc, char *argv[])
     std::vector<State> goals;
     std::vector<State> startStates;
     readMapsFromJson(inputFile, dimx, dimy, startStates, goals, obstacles);
-
     std::cout << "Calculating Solution...\n";
     double timer = 0;
-
-    Environment<Location, State, Action, double, Conflict, Constraint,
-                Constraints>
-        mapf(dimx, dimy, obstacles, dynamic_obstacles, goals);
-
-    ECBS<State, Action, double, Conflict, Constraints,
-         Environment<Location, State, Action, double, Conflict, Constraint,
-                     Constraints>>
-        cbsHybrid(mapf);
+    bool success = false;
     std::vector<PlanResult<State, Action, double>> solution;
-    Timer iterTimer;
-    bool success = cbsHybrid.search(startStates, solution);
-    iterTimer.stop();
-    timer=iterTimer.elapsedSeconds();
+    for (size_t iter = 0; iter < (double)goals.size() / batchSize; iter++)
+    {
+        size_t first = iter * batchSize;
+        size_t last = first + batchSize;
+        if (last >= goals.size())
+            last = goals.size();
+        std::vector<State> m_goals(goals.begin() + first, goals.begin() + last);
+        std::vector<State> m_starts(startStates.begin() + first,
+                                    startStates.begin() + last);
+
+        Environment<Location, State, Action, double, Conflict, Constraint,
+                    Constraints>
+            mapf(dimx, dimy, obstacles, dynamic_obstacles, m_goals);
+        if (!mapf.startAndGoalValid(m_starts, iter, batchSize))
+        {
+            success = false;
+            break;
+        }
+        for (auto goal = goals.begin() + last; goal != goals.end(); goal++)
+        {
+            dynamic_obstacles.insert(
+                std::pair<int, State>(-1, State(goal->x, goal->y, goal->yaw)));
+        }
+        CL_CBS<State, Action, double, Conflict, Constraints,
+               Environment<Location, State, Action, double, Conflict, Constraint,
+                           Constraints>>
+            cbsHybrid(mapf);
+        std::vector<PlanResult<State, Action, double>> m_solution;
+        Timer iterTimer;
+        success = cbsHybrid.search(m_starts, m_solution);
+        iterTimer.stop();
+
+        if (!success)
+        {
+            std::cout << "\033[1m\033[31m No." << iter
+                      << "iter fail to find a solution \033[0m\n";
+            break;
+        }
+        else
+        {
+            solution.insert(solution.end(), m_solution.begin(), m_solution.end());
+            for (size_t a = 0; a < m_solution.size(); ++a)
+            {
+                for (const auto &state : m_solution[a].states)
+                    dynamic_obstacles.insert(std::pair<int, State>(
+                        state.first.time,
+                        State(state.first.x, state.first.y, state.first.yaw)));
+                State lastState = m_solution[a].states.back().first;
+                dynamic_obstacles.insert(std::pair<int, State>(
+                    -lastState.time, State(lastState.x, lastState.y, lastState.yaw)));
+            }
+            timer += iterTimer.elapsedSeconds();
+            std::cout << "Complete " << iter
+                      << " iter. Runtime:" << iterTimer.elapsedSeconds()
+                      << " Expand high-level nodes:" << mapf.highLevelExpanded()
+                      << " Average Low-level-search time:"
+                      << iterTimer.elapsedSeconds() / mapf.highLevelExpanded() /
+                             m_goals.size()
+                      << std::endl;
+        }
+        dynamic_obstacles.erase(-1);
+    }
+
     if (success)
     {
         std::cout << "\033[1m\033[32m Successfully find solution! \033[0m\n";
 
-        // double makespan = 0, flowtime = 0, cost = 0;
-        // for (const auto &s : solution)
-        //     cost += s.cost;
+        double makespan = 0, flowtime = 0, cost = 0;
+        for (const auto &s : solution)
+            cost += s.cost;
 
-        // for (size_t a = 0; a < solution.size(); ++a)
-        // {
-        //     // calculate makespan
-        //     double current_makespan = 0;
-        //     for (size_t i = 0; i < solution[a].actions.size(); ++i)
-        //     {
-        //         // some action cost have penalty coefficient
+        for (size_t a = 0; a < solution.size(); ++a)
+        {
+            // calculate makespan
+            double current_makespan = 0;
+            for (size_t i = 0; i < solution[a].actions.size(); ++i)
+            {
+                // some action cost have penalty coefficient
 
-        //         if (solution[a].actions[i].second < Constants::dx[0])
-        //             current_makespan += solution[a].actions[i].second;
-        //         else if (solution[a].actions[i].first % 3 == 0)
-        //             current_makespan += Constants::dx[0];
-        //         else
-        //             current_makespan += Constants::r * Constants::deltat;
-        //     }
-        //     flowtime += current_makespan;
-        //     if (current_makespan > makespan)
-        //         makespan = current_makespan;
-        // }
-        // std::cout << " Runtime: " << timer << std::endl
-        //           << " Makespan:" << makespan << std::endl
-        //           << " Flowtime:" << flowtime << std::endl
-        //           << " cost:" << cost << std::endl;
-        // output to file
-        dumpOutputToJson(outputFile, solution, timer);
+                if (solution[a].actions[i].second < Constants::dx[0])
+                    current_makespan += solution[a].actions[i].second;
+                else if (solution[a].actions[i].first % 3 == 0)
+                    current_makespan += Constants::dx[0];
+                else
+                    current_makespan += Constants::r * Constants::deltat;
+            }
+            flowtime += current_makespan;
+            if (current_makespan > makespan)
+                makespan = current_makespan;
+        }
+        std::cout << " Runtime: " << timer << std::endl
+                  << " Makespan:" << makespan << std::endl
+                  << " Flowtime:" << flowtime << std::endl
+                  << " cost:" << cost << std::endl;
+        dumpOutputToJson(outputFile, solution);
     }
     else
     {
@@ -615,7 +644,7 @@ int ECBS_exe(int argc, char *argv[])
 
 void eval()
 {
-    std::string data_file = "./data/ecbs.csv";
+    std::string data_file = "./data/cbs.csv";
     std::string input_folder = "./instances/one_shot/empty/";
 
     std::vector<int> num_agents = {10, 20, 30, 40, 50, 60};
@@ -629,10 +658,11 @@ void eval()
         double runtime_sum = 0;
         double succ_sum = 0;
 
+        
         for (int k = 0; k < num_instances; k++)
         {
-            // std::string instance_prefix =
-            std::string instance = input_folder + "agents_" + std::to_string(n) + "_" + std::to_string(k) + ".json";
+            // std::string instance_prefix = 
+            std::string instance = input_folder + "agents_"+std::to_string(n)+"_"+std::to_string(k)+".json";
             std::cout << instance << std::endl;
             size_t dimx, dimy;
             std::unordered_set<Location> obstacles;
@@ -647,9 +677,9 @@ void eval()
                         Constraints>
                 mapf(dimx, dimy, obstacles, dynamic_obstacles, goals);
 
-            ECBS<State, Action, double, Conflict, Constraints,
-                 Environment<Location, State, Action, double, Conflict, Constraint,
-                             Constraints>>
+            CL_CBS<State, Action, double, Conflict, Constraints,
+                   Environment<Location, State, Action, double, Conflict, Constraint,
+                               Constraints>>
                 cbsHybrid(mapf);
             std::vector<PlanResult<State, Action, double>> solution;
             Timer iterTimer;
@@ -700,5 +730,6 @@ void eval()
 int main(int argc, char *argv[])
 {
     // eval();
-    ECBS_exe(argc, argv);
+    CBS_exe(argc, argv);
+    return 0;
 }

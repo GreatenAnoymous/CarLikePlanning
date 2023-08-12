@@ -56,8 +56,8 @@ namespace std
 
 struct State
 {
-    State(double x = 0, double y = 0, double yaw = 0, int time = 0, int greedy = 0)
-        : time(time), x(x), y(y), yaw(yaw), greedy(greedy)
+    State(double x = 0, double y = 0, double yaw = 0, int time = 0, int greedy = 0, int headon = 0)
+        : time(time), x(x), y(y), yaw(yaw), greedy(greedy), headon(headon)
     {
         rot.resize(2, 2);
         rot(0, 0) = cos(-this->yaw);
@@ -80,6 +80,14 @@ struct State
             pow(2 * Constants::LF, 2) + pow(Constants::carWidth, 2))
             return true;
         return false;
+    }
+
+    bool equalWithoutTime(const State &other) const
+    {
+        double dist;
+        double dyaw = pow(cos(yaw) - cos(other.yaw), 2) + pow(sin(yaw) - sin(other.yaw), 2);
+        dist = sqrt(pow(x - other.x, 2) + pow(y - other.y, 2) + dyaw);
+        return (dist < 1e-1);
     }
 
     bool obsCollision(const Location &obstacle) const
@@ -107,6 +115,7 @@ struct State
     double y;
     double yaw;
     int greedy;
+    int headon;
 
 private:
     boost::numeric::ublas::matrix<double> rot;
@@ -136,7 +145,6 @@ struct AStarNode
 {
     State state;
     double f;
-    double h;
     double cost;
     std::shared_ptr<AStarNode> parent;
     Action act = 6;
@@ -230,15 +238,33 @@ public:
         return m_goals.size();
     }
 
+    void markHeadonNeighbor(size_t agent, State &curr, std::vector<Neighbor<State, Action, double>> &neighbors, int parent_agent = -1, Action parentAct = -1)
+    {
+        if (parent_agent == -1)
+            return;
+        if (parentAct != 0 and parentAct != 3)
+            return;
+        for (auto &nbr : neighbors)
+        {
+            if (nbr.action == 0 or nbr.action == 3)
+            {
+                if (admissibleHeuristic(nbr.state, agent) >= admissibleHeuristic(curr, agent))
+                {
+                    nbr.state.headon = 1;
+                }
+            }
+        }
+    }
+
     void getNeighbors(State &s, Action action,
-                      std::vector<Neighbor<State, Action, double>> &neighbors, int agent = -1)
+                      std::vector<Neighbor<State, Action, double>> &neighbors, int agent = -1, bool canwait = true)
     {
 
         neighbors.clear();
         double g = Constants::dx[0];
 
 #if DEBUG_ENABLE
-        std::cout << "current state of agent " << agent << "=" << s << "  goal state=" << getGoal(agent) << std::endl;
+        // std::cout << "current state of agent " << agent << "=" << s << "  goal state=" << getGoal(agent) << std::endl;
 #endif
         for (Action act = 0; act < 6; act++)
         { // has 6 directions for Reeds-Shepp
@@ -252,8 +278,8 @@ public:
 
             if (act % 3 != 0)
             { // penalize turning
-                if (act < 3)
-                    g = g * Constants::penaltyTurning;
+                // if (act < 3)
+                g = g * Constants::penaltyTurning;
             }
             if ((act < 3 && action >= 3) || (action < 3 && act >= 3))
             {
@@ -282,20 +308,23 @@ public:
                 // std::cout << "This neighbor is not valid!" << std::endl;
             }
         }
-        // wait
-        g = Constants::dx[0];
-
-        State tempState(s.x, s.y, s.yaw, s.time + 1);
-        if (stateValid(tempState))
+        if (canwait == true)
         {
-            if (arrivedGoal(tempState, agent) == false)
+            // wait
+            g = Constants::dx[0];
+
+            State tempState(s.x, s.y, s.yaw, s.time + 1);
+            if (stateValid(tempState))
             {
-                g = g * Constants::penaltyWait;
+                if (arrivedGoal(tempState, agent) == false)
+                {
+                    g = g * Constants::penaltyWait;
 #if DEBUG_ENABLE
-                std::cout << " penalty to wait  g=" << g << " penalty=" << Constants::penaltyWait << std::endl;
+                    // std::cout << " penalty to wait  g=" << g << " penalty=" << Constants::penaltyWait << std::endl;
 #endif
+                }
+                neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
             }
-            neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g));
         }
         // analytic expansioned neighbor
     }
@@ -359,10 +388,177 @@ public:
         windowedSearch(state, action, agent, next);
 
         next.state.greedy = 1;
+        next.state.time = state.time + 1;
         neighbors.push_back(next);
     }
 
+    void singleRobotPathPlanning(State &start, int agentId, std::vector<Neighbor<State, Action, double>> &path)
+    {
+        path.clear();
+        double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));
+        if (goal_distance < 1e-1)
+        {
+            Neighbor<State, Action, double> next(getGoal(agentId), 0, 1);
+            next.state.time = start.time + 1;
+            path.push_back(next);
+            return;
+        }
+        using AStarNode_p = std::shared_ptr<AStarNode>;
+        auto compare = [&](AStarNode_p a1, AStarNode_p a2)
+        {
+            if (a1->f != a2->f)
+                return a1->f > a2->f;
+            return a1->cost < a2->cost;
+        };
 
+        std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
+        std::unordered_map<uint64_t, AStarNode_p> openSet;
+        std::unordered_set<uint64_t> closed;
+        auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
+        startNode->sid = calcIndexWithoutTIme(start);
+        startNode->act = 6;
+        open.push(startNode);
+        openSet.insert({startNode->sid, startNode});
+        int t0 = start.time;
+        while (!open.empty())
+        {
+            auto n = open.top();
+
+            // std::cout << "state=" << n->state << "  cost=" << n->cost << " f=" << n->f<<"  h="<<n->f-n->cost << "  goal=" << getGoal(agentId) << std::endl;
+            double goal_distance =
+                sqrt(pow(n->state.x - getGoal(agentId).x, 2) + pow(n->state.y - getGoal(agentId).y, 2));
+            if (goal_distance <= 3 * (Constants::LB + Constants::LF))
+            {
+                ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
+                OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
+                OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
+                rsStart->setXY(n->state.x, n->state.y);
+                rsStart->setYaw(-n->state.yaw);
+                rsEnd->setXY(getGoal(agentId).x, getGoal(agentId).y);
+                rsEnd->setYaw(-getGoal(agentId).yaw);
+                ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
+                    reedsSheppSpace.reedsShepp(rsStart, rsEnd);
+                double gScore = n->cost;
+                auto tmp = n;
+                std::vector<State> tmp_path;
+                tmp_path.emplace_back(n->state);
+                bool is_solution = true;
+                for (auto pathidx = 0; pathidx < 5; pathidx++)
+                {
+                    if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
+                        continue;
+                    double deltat = 0, dx = 0, act = 0, cost = 0;
+                    switch (reedsShepppath.type_[pathidx])
+                    {
+                    case 0: // RS_NOP
+                        continue;
+                        break;
+                    case 1: // RS_LEFT
+                        deltat = -reedsShepppath.length_[pathidx];
+                        dx = Constants::r * sin(-deltat);
+                        // dy = Constants::r * (1 - cos(-deltat));
+                        act = 2;
+                        cost = reedsShepppath.length_[pathidx] * Constants::r *
+                               Constants::penaltyTurning;
+                        break;
+                    case 2: // RS_STRAIGHT
+                        deltat = 0;
+                        dx = reedsShepppath.length_[pathidx] * Constants::r;
+                        // dy = 0;
+                        act = 0;
+                        cost = dx;
+                        break;
+                    case 3: // RS_RIGHT
+                        deltat = reedsShepppath.length_[pathidx];
+                        dx = Constants::r * sin(deltat);
+                        // dy = -Constants::r * (1 - cos(deltat));
+                        act = 1;
+                        cost = reedsShepppath.length_[pathidx] * Constants::r *
+                               Constants::penaltyTurning;
+                        break;
+                    default:
+                        std::cout << "\033[1m\033[31m"
+                                  << "Warning: Receive unknown ReedsSheppPath type"
+                                  << "\033[0m\n";
+                        break;
+                    }
+                    if (cost < 0)
+                    {
+                        cost = -cost * Constants::penaltyReversing;
+                        act = act + 3;
+                    }
+                    State s = tmp_path.back();
+                    std::vector<std::pair<State, double>> next_path;
+
+                    if (generatePath(s, act, deltat, dx, next_path))
+                    {
+                        for (auto iter = next_path.begin(); iter != next_path.end(); iter++)
+                        {
+                            State next_s = iter->first;
+                            gScore += iter->second;
+                            if (!(next_s == tmp_path.back()))
+                            {
+                                auto child = std::make_shared<AStarNode>(next_s, gScore, gScore, act, tmp);
+                                tmp = child;
+                            }
+                            tmp_path.emplace_back(next_s);
+                        }
+                    }
+                    else
+                    {
+                        is_solution = false;
+                        break;
+                    }
+                }
+                if (is_solution)
+                {
+                    while (tmp->parent != nullptr)
+                    {
+                        path.emplace_back(Neighbor<State, Action, double>(tmp->state, tmp->act, tmp->cost));
+                        tmp = tmp->parent;
+                    }
+                    return;
+                }
+            }
+
+            closed.insert(n->sid);
+            open.pop();
+            openSet.erase(n->sid);
+            std::vector<Neighbor<State, Action, double>> neighbors;
+            getNeighbors(n->state, n->act, neighbors, agentId, false);
+            for (auto &nbr : neighbors)
+            {
+
+                int cid = calcIndexWithoutTIme(nbr.state);
+                if (closed.find(cid) != closed.end())
+                    continue;
+
+                double g = n->cost + nbr.cost;
+
+                if (openSet.find(cid) == openSet.end())
+                {
+                    double h = admissibleHeuristic(nbr.state, agentId);
+                    auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
+                    child->sid = cid;
+                    open.push(child);
+                    openSet.insert({cid, child});
+                }
+                else
+                {
+                    auto oldNode = openSet[cid];
+                    if (oldNode->cost < g)
+                        continue;
+                    double h = admissibleHeuristic(nbr.state, agentId);
+                    auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
+                    child->sid = cid;
+                    openSet[cid] = child;
+                }
+            }
+        }
+        std::cout << "path not found for agent  " << agentId << std::endl;
+        // throw std::runtime_error("did not find solution");
+        return;
+    }
 
     void addGoalToNeighborIfClose(State &state, Action action, std::vector<Neighbor<State, Action, double>> &neighbors, int agent)
     {
@@ -502,15 +698,15 @@ private:
         return true;
     }
 
-    void singleRobotPathPlanning(State &start, Action action, int agentId, std::vector<Neighbor<State, Action, double>> &path)
+    void windowedSearch(State &start, Action action, int agentId, Neighbor<State, Action, double> &next, int window = 25)
     {
-        path.clear();
-        double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));
-        if (goal_distance < 1e-1)
+
+        if (arrivedGoal(start, agentId))
         {
-            Neighbor<State, Action, double> next(getGoal(agentId), 0, 1);
+            next.state = getGoal(agentId);
             next.state.time = start.time + 1;
-            path.push_back(next);
+            next.cost = 0;
+            next.action = 1;
             return;
         }
         using AStarNode_p = std::shared_ptr<AStarNode>;
@@ -522,15 +718,30 @@ private:
         };
 
         std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
-        std::unordered_map<int, AStarNode_p> closed;
+        std::unordered_map<uint64_t, AStarNode_p> openSet;
+        std::unordered_set<uint64_t> closed;
         auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
-        startNode->sid = calcIndex(start);
+        startNode->sid = calcIndexWithoutTIme(start);
         startNode->act = action;
         open.push(startNode);
+        openSet.insert({startNode->sid, startNode});
         int t0 = start.time;
         while (!open.empty())
         {
             auto n = open.top();
+            // if (n->state.time >= t0 + window)
+            // {
+            //     auto curr = n;
+            //     while (curr->parent != startNode)
+            //     {
+            //         curr = curr->parent;
+            //     }
+            //     next.action = curr->act;
+            //     next.cost = curr->cost;
+            //     next.state = curr->state;
+            //     // std::reverse(path.begin(), path.end());
+            //     return;
+            // }
             double goal_distance =
                 sqrt(pow(n->state.x - getGoal(agentId).x, 2) + pow(n->state.y - getGoal(agentId).y, 2));
             if (goal_distance <= 3 * (Constants::LB + Constants::LF))
@@ -544,9 +755,10 @@ private:
                 rsEnd->setYaw(-getGoal(agentId).yaw);
                 ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
                     reedsSheppSpace.reedsShepp(rsStart, rsEnd);
-                double gScore = n->cost;
                 std::vector<State> tmp_path;
+                double gScore = n->cost;
                 tmp_path.emplace_back(n->state);
+                auto tmp = n;
                 bool is_solution = true;
                 for (auto pathidx = 0; pathidx < 5; pathidx++)
                 {
@@ -603,8 +815,8 @@ private:
                             gScore += iter->second;
                             if (!(next_s == tmp_path.back()))
                             {
-                                auto child = std::make_shared<AStarNode>(next_s, gScore, gScore, act, n);
-                                n = child;
+                                auto child = std::make_shared<AStarNode>(next_s, gScore, gScore, act, tmp);
+                                tmp = child;
                             }
                             tmp_path.emplace_back(next_s);
                         }
@@ -617,235 +829,105 @@ private:
                 }
                 if (is_solution)
                 {
-                    while (n->parent != nullptr)
+                    std::cout << "debug is solution" << tmp->state << "  " << getGoal(agentId) << std::endl;
+                    while (tmp->parent != nullptr)
                     {
-                        path.emplace_back(Neighbor<State, Action, double>(n->state, n->act, n->cost));
-                        n = n->parent;
+                        if (tmp->parent->state == start)
+                            break;
+                        tmp = tmp->parent;
                     }
+                    next.action = tmp->act;
+                    next.cost = tmp->cost;
+                    next.state = tmp->state;
+
                     return;
+                    // std::cout << "Debug windowed search found solution!!!!" << std::endl;
+                    // auto curr = n;
+                    // if (n != startNode)
+                    // {
+                    //     while (curr->parent != startNode)
+                    //     {
+                    //         // path.push_back(curr->state);
+                    //         curr = curr->parent;
+                    //     }
+                    //     next.action = curr->act;
+                    //     next.cost = curr->cost;
+                    //     next.state = curr->state;
+                    //     // if (arrivedGoal(next.state, agentId))
+                    //     // {
+                    //     //     std::cout << "debug windowed search arrived goals" << next.state << "   " << getGoal(agentId) << std::endl;
+                    //     //     next.state = getGoal(agentId);
+                    //     // }
+                    //     // std::reverse(path.begin(), path.end());
+                    //     return;
+                    // }
+                    // else
+                    // {
+                    //     std::cout << "debug windowed search arrived goals" << next.state << "   " << getGoal(agentId) << std::endl;
+                    //     std::cout << " debug reeds shepp path, goal=" << getGoal(agentId) << std::endl;
+                    //     for (auto &v : tmp_path)
+                    //     {
+                    //         std::cout << v << std::endl;
+                    //     }
+                    //     std::cout << std::endl;
+                    //     assert(tmp_path.size() > 1);
+                    //     next.action = 1;
+                    //     next.cost = Constants::dx[0];
+                    //     next.state = tmp_path[1];
+                    //     if (arrivedGoal(next.state, agentId))
+                    //     {
+                    //         next.state = getGoal(agentId);
+                    //         next.state.time = n->state.time + 1;
+                    //     }
+                    //     // for (int k = 1; k < tmp_path.size(); k++)
+                    //     // {
+                    //     //     if (tmp_path[k].time > t0 + window)
+                    //     //         break;
+                    //     //     path.push_back(tmp_path[k]);
+                    //     // }
+                    //     return;
+                    // }
                 }
             }
 
-            closed[n->sid] = n;
+            closed.insert(n->sid);
             open.pop();
+            openSet.erase(n->sid);
             std::vector<Neighbor<State, Action, double>> neighbors;
-            getNeighbors(n->state, n->act, neighbors, agentId);
+            getNeighbors(n->state, n->act, neighbors, agentId, false);
             for (auto &nbr : neighbors)
             {
 
-                int cid = calcIndex(nbr.state);
-                double g = n->cost + nbr.cost;
+                int cid = calcIndexWithoutTIme(nbr.state);
                 if (closed.find(cid) != closed.end())
-                {
-                    if (closed[cid]->cost < g)
-                    {
-                        continue;
-                    }
-                }
-                double h = admissibleHeuristic(nbr.state, agentId);
-                auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
-                child->sid = cid;
-                open.push(child);
-            }
-        }
-        return;
-    }
+                    continue;
 
-    
-
-    void windowedSearch(State &start, Action action, int agentId, Neighbor<State, Action, double> &next, int window = 25)
-    {
-        double goal_distance = sqrt(pow(start.x - getGoal(agentId).x, 2) + pow(start.y - getGoal(agentId).y, 2));
-        if (goal_distance < 1e-1)
-        {
-            next.state = getGoal(agentId);
-            next.state.time = start.time + 1;
-            next.cost = 0;
-            next.action = 1;
-            return;
-        }
-        using AStarNode_p = std::shared_ptr<AStarNode>;
-        auto compare = [&](AStarNode_p a1, AStarNode_p a2)
-        {
-            if (a1->f != a2->f)
-                return a1->f > a2->f;
-            return a1->cost < a2->cost;
-        };
-
-        std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
-        std::unordered_map<int, AStarNode_p> closed;
-        auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
-        startNode->sid = calcIndex(start);
-        startNode->act = action;
-        open.push(startNode);
-        int t0 = start.time;
-        while (!open.empty())
-        {
-            auto n = open.top();
-            // if (n->state.time >= t0 + window)
-            // {
-            //     auto curr = n;
-            //     while (curr->parent != startNode)
-            //     {
-            //         curr = curr->parent;
-            //     }
-            //     next.action = curr->act;
-            //     next.cost = curr->cost;
-            //     next.state = curr->state;
-            //     // std::reverse(path.begin(), path.end());
-            //     return;
-            // }
-            double goal_distance =
-                sqrt(pow(n->state.x - getGoal(agentId).x, 2) + pow(n->state.y - getGoal(agentId).y, 2));
-            if (goal_distance <= 3 * (Constants::LB + Constants::LF))
-            {
-                ompl::base::ReedsSheppStateSpace reedsSheppSpace(Constants::r);
-                OmplState *rsStart = (OmplState *)reedsSheppSpace.allocState();
-                OmplState *rsEnd = (OmplState *)reedsSheppSpace.allocState();
-                rsStart->setXY(n->state.x, n->state.y);
-                rsStart->setYaw(-n->state.yaw);
-                rsEnd->setXY(getGoal(agentId).x, getGoal(agentId).y);
-                rsEnd->setYaw(-getGoal(agentId).yaw);
-                ompl::base::ReedsSheppStateSpace::ReedsSheppPath reedsShepppath =
-                    reedsSheppSpace.reedsShepp(rsStart, rsEnd);
-                std::vector<State> tmp_path;
-                tmp_path.emplace_back(n->state);
-                bool is_solution = true;
-                for (auto pathidx = 0; pathidx < 5; pathidx++)
-                {
-                    if (fabs(reedsShepppath.length_[pathidx]) < 1e-6)
-                        continue;
-                    double deltat = 0, dx = 0, act = 0, cost = 0;
-                    switch (reedsShepppath.type_[pathidx])
-                    {
-                    case 0: // RS_NOP
-                        continue;
-                        break;
-                    case 1: // RS_LEFT
-                        deltat = -reedsShepppath.length_[pathidx];
-                        dx = Constants::r * sin(-deltat);
-                        // dy = Constants::r * (1 - cos(-deltat));
-                        act = 2;
-                        cost = reedsShepppath.length_[pathidx] * Constants::r *
-                               Constants::penaltyTurning;
-                        break;
-                    case 2: // RS_STRAIGHT
-                        deltat = 0;
-                        dx = reedsShepppath.length_[pathidx] * Constants::r;
-                        // dy = 0;
-                        act = 0;
-                        cost = dx;
-                        break;
-                    case 3: // RS_RIGHT
-                        deltat = reedsShepppath.length_[pathidx];
-                        dx = Constants::r * sin(deltat);
-                        // dy = -Constants::r * (1 - cos(deltat));
-                        act = 1;
-                        cost = reedsShepppath.length_[pathidx] * Constants::r *
-                               Constants::penaltyTurning;
-                        break;
-                    default:
-                        std::cout << "\033[1m\033[31m"
-                                  << "Warning: Receive unknown ReedsSheppPath type"
-                                  << "\033[0m\n";
-                        break;
-                    }
-                    if (cost < 0)
-                    {
-                        cost = -cost * Constants::penaltyReversing;
-                        act = act + 3;
-                    }
-                    State s = tmp_path.back();
-                    std::vector<std::pair<State, double>> next_path;
-
-                    if (generatePath(s, act, deltat, dx, next_path))
-                    {
-                        for (auto iter = next_path.begin() + 1; iter != next_path.end(); iter++)
-                        {
-                            State next_s = iter->first;
-                            tmp_path.emplace_back(next_s);
-                        }
-                    }
-                    else
-                    {
-                        is_solution = false;
-                        break;
-                    }
-                }
-                if (is_solution)
-                {
-                    std::cout << "Debug windowed search found solution!!!!" << std::endl;
-                    auto curr = n;
-                    if (n != startNode)
-                    {
-                        while (curr->parent != startNode)
-                        {
-                            // path.push_back(curr->state);
-                            curr = curr->parent;
-                        }
-                        next.action = curr->act;
-                        next.cost = curr->cost;
-                        next.state = curr->state;
-                        // if (arrivedGoal(next.state, agentId))
-                        // {
-                        //     std::cout << "debug windowed search arrived goals" << next.state << "   " << getGoal(agentId) << std::endl;
-                        //     next.state = getGoal(agentId);
-                        // }
-                        // std::reverse(path.begin(), path.end());
-                        return;
-                    }
-                    else
-                    {
-                        std::cout << "debug windowed search arrived goals" << next.state << "   " << getGoal(agentId) << std::endl;
-                        std::cout << " debug reeds shepp path, goal=" << getGoal(agentId) << std::endl;
-                        for (auto &v : tmp_path)
-                        {
-                            std::cout << v << std::endl;
-                            ;
-                        }
-                        std::cout << std::endl;
-                        assert(tmp_path.size() > 1);
-                        next.action = 1;
-                        next.cost = Constants::dx[0];
-                        next.state = tmp_path[1];
-                        if (arrivedGoal(next.state, agentId))
-                        {
-                            next.state = getGoal(agentId);
-                            next.state.time = n->state.time + 1;
-                        }
-                        // for (int k = 1; k < tmp_path.size(); k++)
-                        // {
-                        //     if (tmp_path[k].time > t0 + window)
-                        //         break;
-                        //     path.push_back(tmp_path[k]);
-                        // }
-                        return;
-                    }
-                }
-            }
-
-            closed[n->sid] = n;
-            open.pop();
-            std::vector<Neighbor<State, Action, double>> neighbors;
-            getNeighbors(n->state, n->act, neighbors, agentId);
-            for (auto &nbr : neighbors)
-            {
-
-                int cid = calcIndex(nbr.state);
                 double g = n->cost + nbr.cost;
-                if (closed.find(cid) != closed.end())
+                if (openSet.find(cid) != openSet.end())
                 {
-                    if (closed[cid]->cost < g)
-                    {
-                        continue;
-                    }
+                    double h = admissibleHeuristic(nbr.state, agentId);
+                    auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
+                    child->sid = cid;
+
+                    open.push(child);
+                    openSet.insert({cid, child});
                 }
-                double h = admissibleHeuristic(nbr.state, agentId);
-                auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
-                child->sid = cid;
-                open.push(child);
+                else
+                {
+                    auto oldNode = openSet[cid];
+                    if (oldNode == nullptr)
+                        continue;
+                    // assert(oldNode!=nullptr);
+                    if (oldNode->cost < g)
+                        continue;
+                    double h = admissibleHeuristic(nbr.state, agentId);
+                    auto child = std::make_shared<AStarNode>(nbr.state, g + h, g, nbr.action, n);
+                    child->sid = cid;
+                    openSet[cid] = child;
+                }
             }
         }
+        // throw std::runtime_error("did not find solution");
         return;
     }
 
@@ -910,6 +992,7 @@ private:
                             temp_obs_set.find(std::make_pair(new_x, new_y)) ==
                                 temp_obs_set.end())
                         {
+
                             holonomic_cost_maps[idx][new_x][new_y] =
                                 holonomic_cost_maps[idx][x][y] +
                                 sqrt(pow(dx * Constants::mapResolution, 2) +
@@ -1119,11 +1202,16 @@ public:
         std::random_device rd;
         std::default_random_engine engine(rd());
         std::uniform_real_distribution<double> distribution(0.0, 1.0);
+        double bonus = Constants::greedyBonus;
 
         auto comparator = [&](Neighbor<State, Action, double> &a, Neighbor<State, Action, double> &b)
         {
-            auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost * (1 + getStateHistory(agent, a.state) - Constants::greedyBonus * a.state.greedy);
-            auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost * (1 + getStateHistory(agent, b.state) - Constants::greedyBonus * b.state.greedy);
+            auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost * (1 + getStateHistory(agent, a.state) - bonus * a.state.greedy);
+            auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost * (1 + getStateHistory(agent, b.state) - bonus * b.state.greedy);
+            // auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost * (1 - bonus * a.state.greedy);
+            // auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost * (1 - bonus * b.state.greedy);
+            // auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost* (1 + getStateHistory(agent, a.state) - bonus * a.state.greedy+Constants::penaltyHeadon*a.state.headon);
+            // auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost* (1 + getStateHistory(agent, b.state) - bonus * b.state.greedy+Constants::penaltyHeadon*b.state.headon);
             if (scoreA != scoreB)
                 return scoreA < scoreB;
             return false;
@@ -1131,6 +1219,81 @@ public:
         std::sort(neighbors.begin(), neighbors.end(), comparator);
     }
 };
+
+void readMapsFromJson(std::string inputFile, size_t &xmax, size_t &ymax,
+                      std::vector<State> &starts,
+                      std::vector<State> &goals,
+                      std::unordered_set<Location> &obstacles)
+{
+    std::ifstream file(inputFile);
+    if (!file.is_open())
+    {
+        std::cerr << "Error opening file: " << inputFile << std::endl;
+        return;
+    }
+
+    // Parse the JSON data
+    nlohmann::json data;
+    try
+    {
+        file >> data;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error parsing JSON: " << e.what() << std::endl;
+        file.close();
+        return;
+    }
+
+    // std::vector<std::vector<double>> obstacle_vec;
+    // std::vector<std::vector<double>>  start_vec;
+    // std::vector<std::vector<std::vector<double>>> goal_vec;
+    // Extract data from JSON
+    try
+    {
+        xmax = data["xmax"];
+        ymax = data["ymax"];
+
+        // Read obstacles
+        if (data.count("obstacles") > 0)
+        {
+            for (const auto &obstacle : data["obstacles"])
+            {
+                std::vector<double> obstacleCoords = obstacle;
+                // obstacle_vec.push_back(obstacleCoords);
+                obstacles.insert(Location(obstacleCoords[0], obstacleCoords[1]));
+            }
+        }
+
+        // Read starts
+        if (data.count("starts") > 0)
+        {
+            std::cout << "starts size=" << data["starts"].size() << std::endl;
+            for (const auto &svec : data["starts"])
+            {
+                // obstacle_vec.push_back(obstacleCoords);
+                starts.push_back(State(svec[0], svec[1], svec[2]));
+            }
+        }
+
+        // Read goals
+        if (data.count("goals") > 0)
+        {
+            for (const auto &goal : data["goals"])
+            {
+                // obstacle_vec.push_back(obstacleCoords);
+                goals.push_back(State(goal[0], goal[1], goal[2]));
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error extracting data from JSON: " << e.what() << std::endl;
+    }
+
+    // Close the file
+    file.close();
+}
 
 void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
                       std::vector<State> &startStates,
@@ -1170,60 +1333,24 @@ void readMapsFromYaml(std::string inputFile, size_t &dimx, size_t &dimy,
     }
 }
 
-void dumpOutputToYaml(std::string outputFile, std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
-{
-    double makespan = 0, flowtime = 0, cost = 0;
-    for (const auto &s : solution)
-        cost += s.cost;
-
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        // calculate makespan
-        double current_makespan = 0;
-        for (size_t i = 0; i < solution[a].actions.size(); ++i)
-        {
-            // some action cost have penalty coefficient
-
-            if (solution[a].actions[i].second < Constants::dx[0])
-                current_makespan += solution[a].actions[i].second;
-            else if (solution[a].actions[i].first % 3 == 0)
-                current_makespan += Constants::dx[0];
-            else
-                current_makespan += Constants::r * Constants::deltat;
-        }
-        flowtime += current_makespan;
-        if (current_makespan > makespan)
-            makespan = current_makespan;
-    }
-    std::cout << " Runtime: " << timer << std::endl
-              << " Makespan:" << makespan << std::endl
-              << " Flowtime:" << flowtime << std::endl
-              << " cost:" << cost << std::endl;
-    std::ofstream out;
-    out = std::ofstream(outputFile);
-    // output to file
-    out << "statistics:" << std::endl;
-    out << "  cost: " << cost << std::endl;
-    out << "  makespan: " << makespan << std::endl;
-    out << "  flowtime: " << flowtime << std::endl;
-    out << "  runtime: " << timer << std::endl;
-    out << "schedule:" << std::endl;
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        out << "  agent" << a << ":" << std::endl;
-        for (const auto &state : solution[a].states)
-        {
-            out << "    - x: " << state.first.x << std::endl
-                << "      y: " << state.first.y << std::endl
-                << "      yaw: " << state.first.yaw << std::endl
-                << "      t: " << state.first.time << std::endl;
-        }
-    }
-}
-
 void dumpOutputToJson(std::string outputFile,
-                      std::vector<PlanResult<State, Action, double>> &solution, double timer = 0)
+                      std::vector<PlanResult<State, Action, double>> &solution, double timer = 0, bool solved = true, double arrivalRate = 1)
 {
+
+    for (auto &sol : solution)
+    {
+        while (sol.states.back().first.equalWithoutTime(sol.states[sol.states.size() - 2].first))
+        {
+            sol.states.pop_back();
+        }
+
+        sol.cost = 0;
+        // for(auto &s:sol.states){
+        //     sol.cost+=s.second;
+        // }
+        // std::cout<<sol.cost<<std::endl;
+    }
+
     double makespan = 0, flowtime = 0, cost = 0;
     for (const auto &s : solution)
         cost += s.cost;
@@ -1232,13 +1359,13 @@ void dumpOutputToJson(std::string outputFile,
     {
         // calculate makespan
         double current_makespan = 0;
-        for (size_t i = 0; i < solution[a].actions.size(); ++i)
+        for (size_t i = 1; i < solution[a].states.size(); ++i)
         {
             // some action cost have penalty coefficient
 
-            if (solution[a].actions[i].second < Constants::dx[0])
+            if (solution[a].actions[i - 1].second < Constants::dx[0])
                 current_makespan += solution[a].actions[i].second;
-            else if (solution[a].actions[i].first % 3 == 0)
+            else if (solution[a].actions[i - 1].first % 3 == 0)
                 current_makespan += Constants::dx[0];
             else
                 current_makespan += Constants::r * Constants::deltat;
@@ -1250,10 +1377,12 @@ void dumpOutputToJson(std::string outputFile,
 
     nlohmann::json output;
     // Add statistics data to the JSON object
-    output["cost"] = cost;
+    output["cost"] = flowtime;
     output["makespan"] = makespan;
     output["flowtime"] = flowtime;
     output["runtime"] = timer;
+    output["solved"] = solved;
+    output["arrivalRate"] = arrivalRate;
     std::vector<std::vector<std::vector<double>>> paths;
     std::cout << "solution size=" << solution.size() << std::endl;
     // Add schedule data to the JSON object
@@ -1322,16 +1451,23 @@ int main(int argc, char *argv[])
     // std::multimap<int, State> dynamic_obstacles;
     std::vector<State> goals;
     std::vector<State> startStates;
-    readMapsFromYaml(inputFile, dimx, dimy, startStates, goals, obstacles);
+    readMapsFromJson(inputFile, dimx, dimy, startStates, goals, obstacles);
+    // readMapsFromYaml(inputFile, dimx, dimy, startStates, goals, obstacles);
     Environment mapf(dimx, dimy, obstacles, goals);
 
     std::vector<PlanResult<State, Action, double>> solution;
     bool success = false;
-    Timer iterTimer;
+    double timer = 0;
+
     PIBT<State, Action, double, Environment> pibt(mapf, startStates);
+    Timer iterTimer;
     pibt.PIBT_solve();
+    iterTimer.stop();
+    timer = iterTimer.elapsedSeconds();
     solution = pibt.getSolution();
-    dumpOutputToYaml(outputFile, solution, 0);
+    double arrivalRate = pibt.calcArrivalRate();
+    // dumpOutputToYaml(outputFile, solution, 0);
+    dumpOutputToJson(outputFile, solution, timer, pibt.isSolved(), arrivalRate);
 
     return 0;
 }

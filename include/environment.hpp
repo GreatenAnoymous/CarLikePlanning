@@ -185,12 +185,12 @@ namespace libMultiRobotPlanning
             constraints[conflict.agent2] = c2;
         }
 
-        void onExpandHighLevelNode(int /*cost*/)
+        void onExpandHighLevelNode(double time /*cost*/)
         {
             m_highLevelExpanded++;
             if (m_highLevelExpanded % 50 == 0)
                 std::cout << "Now expand " << m_highLevelExpanded
-                          << " high level nodes.\n";
+                          << " high level nodes.  elapsed time="<<time<<std::endl;
         }
 
         int highLevelExpanded() { return m_highLevelExpanded; }

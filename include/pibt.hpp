@@ -13,6 +13,7 @@
 #include <cassert>
 #include <iostream>
 #include <cmath>
+#include "config.hpp"
 #define DEBUG_ENABLE 0
 #define COLLISION_RANGE 8
 
@@ -43,7 +44,8 @@ namespace libMultiRobotPlanning
 
         // std::priority_queue<int,std::vector<int>,sc
         int time_steps;
-        int max_timesteps = 300;
+        int max_timesteps = 500;
+        bool solved = false;
 
         void update_priorities()
         {
@@ -97,6 +99,19 @@ namespace libMultiRobotPlanning
             }
         }
 
+        void find_initial_paths()
+        {
+            size_t num_agents = m_env.getNumAgents();
+            greedy_paths = std::vector<std::vector<Neighbor<State, Action, Cost>>>(num_agents, std::vector<Neighbor<State, Action, Cost>>());
+            for (size_t i = 0; i < num_agents; i++)
+            {
+                std::cout << "Find Initial path for agent " << i << std::endl;
+                m_env.singleRobotPathPlanning(currentStates[i], i, greedy_paths[i]);
+                std::cout << "HYbrid A* completed" << std::endl;
+                exit(0);
+            }
+        }
+
         void compute_nearby_agents()
         {
             size_t num_agents = m_env.getNumAgents();
@@ -114,22 +129,29 @@ namespace libMultiRobotPlanning
             }
         }
 
-        void addGreedyNeighbor(size_t agentId, std::vector<Neighbor<State, Action, double>> &neighbors)
+        void addGreedyNeighbor(size_t agentId, State &curr, std::vector<Neighbor<State, Action, double>> &neighbors)
         {
-            if (greedy_paths.empty() == false)
+            Neighbor<State, Action, Cost> nbr(curr, 0, 0);
+            if (greedy_paths[agentId].empty() == false)
             {
-                auto nbr = greedy_paths[agentId];
-                for (auto it = neighbors.begin(); it != neighbors.end(); it++)
-                {
-                    if (it->state == nbr.state)
-                    {
-                        neighbors.erase(it);
-                        break;
-                    }
-                }
-                nbr.state.greedy = 1;
-                neighbors.push_back(nbr);
+                nbr = greedy_paths[agentId].back();
             }
+            else
+            {
+                nbr.state = m_env.getGoal(agentId);
+                nbr.cost = 0;
+            }
+            nbr.state.time = curr.time + 1;
+            for (auto it = neighbors.begin(); it != neighbors.end(); it++)
+            {
+                if (it->state == nbr.state)
+                {
+                    neighbors.erase(it);
+                    break;
+                }
+            }
+            nbr.state.greedy = 1;
+            neighbors.push_back(nbr);
         }
 
         void moveRobot(size_t agentId, Neighbor<State, Action, Cost> &nbr)
@@ -142,7 +164,8 @@ namespace libMultiRobotPlanning
             lastActions[agentId] = nbr.action;
             if (nbr.state.greedy == 1)
             {
-                greedy_paths.pop_back();
+                if (greedy_paths[agentId].empty() == false)
+                    greedy_paths[agentId].pop_back();
             }
             else
             {
@@ -166,7 +189,16 @@ namespace libMultiRobotPlanning
                 { // backwards
                     g = g * Constants::penaltyReversing;
                 }
-                greedy_paths.push_back(Neighbor<State, Action, Cost>(curr, act, g));
+                greedy_paths[agentId].push_back(Neighbor<State, Action, Cost>(curr, act, g));
+            }
+            double dist;
+            auto goal = m_env.getGoal(agentId);
+            auto s = currentStates[agentId];
+            double dyaw = pow(cos(s.yaw) - cos(goal.yaw), 2) + pow(sin(s.yaw) - sin(goal.yaw), 2);
+            dist = sqrt(pow(s.x - goal.x, 2) + pow(s.y - goal.y, 2) + dyaw);
+            if (dist < 1e-2)
+            {
+                greedy_paths[agentId].clear();
             }
         }
 
@@ -219,6 +251,26 @@ namespace libMultiRobotPlanning
             history = std::vector<std::map<int, float>>(num_agents, std::map<int, float>());
         }
 
+        bool isSolved()
+        {
+            return solved;
+        }
+
+        double calcArrivalRate()
+        {
+            double count=0;
+            for (int i = 0; i < solution.size(); i++)
+            {
+                auto goal = m_env.getGoal(i);
+                auto curr = currentStates[i];
+
+                auto dyaw = pow(cos(goal.yaw) - cos(curr.yaw), 2) + pow(sin(goal.yaw) - sin(curr.yaw), 2);
+                auto dist = sqrt(pow(goal.x - curr.x, 2) + pow(goal.y - curr.y, 2) + dyaw);
+                if (dist < 1e-1) count++;
+            }
+            return count/((double) solution.size());
+        }
+
         void setStates(int agent, State &state)
         {
             assert(agent < currentStates.size());
@@ -227,7 +279,24 @@ namespace libMultiRobotPlanning
 
         void PIBT_solve()
         {
+            std::cout << " starting to solve" << std::endl;
             time_steps = 0;
+            // find_initial_paths();
+            // for (size_t i = 0; i < m_env.getNumAgents(); i++)
+            // {
+            //     solution[i].states.push_back({currentStates[i], 0});
+            //     for (int k = greedy_paths[i].size() - 1; k >= 0; k--)
+            //     {
+            //         // std::cout << k << "   " << greedy_paths[i].size() << std::endl;
+            //         auto nbr = greedy_paths[i][k];
+            //         // std::cout << "????" << std::endl;
+            //         solution[i].states.push_back({nbr.state, nbr.cost});
+            //         solution[i].actions.push_back({nbr.action, nbr.cost});
+            //         solution[i].cost += nbr.cost;
+            //     }
+            // }
+
+            // return;
             while (time_steps <= max_timesteps)
             {
                 update_priorities();
@@ -239,6 +308,7 @@ namespace libMultiRobotPlanning
                 // std::cout << "current state=" << currentStates[0] << "  goal state= " << m_env.getGoal(0) << std::endl;
                 if (arrivedGoals() == true)
                 {
+                    solved = true;
                     std::cout << "All robots have arrived the goal states" << std::endl;
                     break;
                 }
@@ -271,17 +341,19 @@ namespace libMultiRobotPlanning
             return solution;
         }
 
-        bool PIBT_func(int agent, int parent_agent = -1, std::vector<double> parent_state = {-1, -1, -1})
+        bool PIBT_func(int agent, int parent_agent = -1, std::vector<double> parent_state = {-1, -1, -1}, int parent_act = -1)
         {
 #if DEBUG_ENABLE
-            std::cout << "PIBT calls to agent " << agent << std::endl;
+            std::cout << "PIBT calls to agent " << agent << "  current=" << currentStates[agent] << std::endl;
 #endif
             undecided.erase(std::remove(undecided.begin(), undecided.end(), agent));
             undecided_set.erase(agent);
             std::vector<Neighbor<State, Action, double>> neighbors;
             m_env.getNeighbors(currentStates[agent], lastActions[agent], neighbors, agent);
+            // addGreedyNeighbor(agent, currentStates[agent], neighbors);
             // m_env.addGoalToNeighborIfClose(currentStates[agent], lastActions[agent], neighbors, agent);
             m_env.singleRobotMotionGuide(currentStates[agent], lastActions[agent], neighbors, agent);
+            // m_env.markHeadonNeighbor(agent, currentStates[agent], neighbors, parent_agent, parent_act);
             m_env.sortNeighbors(neighbors, agent);
 
             std::vector<int> nearby_undecided;
@@ -297,7 +369,7 @@ namespace libMultiRobotPlanning
 #if DEBUG_ENABLE
             for (auto nbr : neighbors)
             {
-                std::cout << "nbr " << nbr.state << "  act= " << nbr.action << "  f= " << m_env.admissibleHeuristic(nbr.state, agent) + 0.3 * nbr.cost * (1 + m_env.getStateHistory(agent, nbr.state)) << "admissible H=  " << m_env.admissibleHeuristic(nbr.state, agent) << "   cost=" << nbr.cost << "  state history=" << m_env.getStateHistory(agent, nbr.state) << std::endl;
+                std::cout << "nbr " << nbr.state << "  greedy=" << nbr.state.greedy << "  act= " << nbr.action << "  f= " << m_env.admissibleHeuristic(nbr.state, agent) + 0.3 * nbr.cost * (1 + m_env.getStateHistory(agent, nbr.state)) << "admissible H=  " << m_env.admissibleHeuristic(nbr.state, agent) << "   cost=" << nbr.cost << "  state history=" << m_env.getStateHistory(agent, nbr.state) << std::endl;
             }
             std::cout << std::endl;
 #endif
@@ -360,7 +432,7 @@ namespace libMultiRobotPlanning
 #if DEBUG_ENABLE
                         std::cout << "parent agent " << agent << "  to  " << next << " trying to move child agent " << ak << std::endl;
 #endif
-                        if (PIBT_func(ak, agent, {next.x, next.y, next.yaw}) == false)
+                        if (PIBT_func(ak, agent, {next.x, next.y, next.yaw}, nbr.action) == false)
                         {
                             valid = false;
                             break;
@@ -395,6 +467,8 @@ namespace libMultiRobotPlanning
                     solution[agent].actions.push_back({nbr.action, nbr.cost});
                     solution[agent].cost += nbr.cost;
                     lastActions[agent] = nbr.action;
+
+                    // moveRobot(agent, nbr);
 #if DEBUG_ENABLE
                     std::cout << "agent " << agent << "   move to " << next << std::endl;
 #endif
