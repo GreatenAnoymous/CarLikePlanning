@@ -448,7 +448,7 @@ void readMapsFromJson(std::string inputFile, size_t &xmax, size_t &ymax,
 void dumpOutputToJson(std::string outputFile,
                       std::vector<PlanResult<State, Action, double>> &solution, double timer = 0, bool savepath = false)
 {
-    double makespan = 0, flowtime = 0, cost = 0;
+    double makespan = 0, flowtime = 0, cost = 0, makespanStep = 0;
     for (const auto &s : solution)
         cost += s.cost;
 
@@ -468,6 +468,7 @@ void dumpOutputToJson(std::string outputFile,
                 current_makespan += Constants::r * Constants::deltat;
         }
         flowtime += current_makespan;
+        makespanStep = std::max<double>(makespanStep, solution[a].states.size());
         if (current_makespan > makespan)
             makespan = current_makespan;
     }
@@ -475,7 +476,8 @@ void dumpOutputToJson(std::string outputFile,
     nlohmann::json output;
     // Add statistics data to the JSON object
     output["cost"] = cost;
-    output["makespan"] = makespan;
+    output["makespan"] = makespanStep*Constants::dx[0];
+    output["makespanStep"] = makespanStep;
     output["flowtime"] = flowtime;
     output["runtime"] = timer;
     std::vector<std::vector<std::vector<double>>> paths;
@@ -572,7 +574,7 @@ int ECBS_exe(int argc, char *argv[])
     Timer iterTimer;
     bool success = cbsHybrid.search(startStates, solution);
     iterTimer.stop();
-    timer=iterTimer.elapsedSeconds();
+    timer = iterTimer.elapsedSeconds();
     if (success)
     {
         std::cout << "\033[1m\033[32m Successfully find solution! \033[0m\n";

@@ -25,7 +25,7 @@ namespace libMultiRobotPlanning
 
             for (size_t i = 0; i < initialStates.size(); ++i)
             {
-                std::cout << "searching for the initial solution for agent i" << i << std::endl;
+                // std::cout << "searching for the initial solution for agent i" << i << std::endl;
                 if (i < solution.size() && solution[i].states.size() > 1)
                 {
                     std::cout << initialStates[i] << " " << solution[i].states.front().first

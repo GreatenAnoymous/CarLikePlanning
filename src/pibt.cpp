@@ -719,7 +719,7 @@ private:
 
         std::priority_queue<AStarNode_p, std::vector<AStarNode_p>, decltype(compare)> open(compare);
         std::unordered_map<uint64_t, AStarNode_p> openSet;
-        std::unordered_set<uint64_t> closed;
+        std::unordered_map<uint64_t, AStarNode_p> closed;
         auto startNode = std::make_shared<AStarNode>(start, admissibleHeuristic(start, agentId), 0);
         startNode->sid = calcIndexWithoutTIme(start);
         startNode->act = action;
@@ -890,7 +890,7 @@ private:
                 }
             }
 
-            closed.insert(n->sid);
+            closed.insert({n->sid, n});
             open.pop();
             openSet.erase(n->sid);
             std::vector<Neighbor<State, Action, double>> neighbors;
@@ -927,6 +927,7 @@ private:
                 }
             }
         }
+
         // throw std::runtime_error("did not find solution");
         return;
     }
@@ -1185,6 +1186,11 @@ public:
         // std::cout << "update history  " << agent << "   " << sIndex << "   " << history[agent][sIndex] << std::endl;
     }
 
+    void clearHistory(int agent)
+    {
+        history[agent].clear();
+    }
+
     float getStateHistory(int agent, State &curr)
     {
         int sIndex = calcIndexWithoutTIme(curr);
@@ -1210,8 +1216,8 @@ public:
             auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost * (1 + getStateHistory(agent, b.state) - bonus * b.state.greedy);
             // auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost * (1 - bonus * a.state.greedy);
             // auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost * (1 - bonus * b.state.greedy);
-            // auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost* (1 + getStateHistory(agent, a.state) - bonus * a.state.greedy+Constants::penaltyHeadon*a.state.headon);
-            // auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost* (1 + getStateHistory(agent, b.state) - bonus * b.state.greedy+Constants::penaltyHeadon*b.state.headon);
+            // auto scoreA = admissibleHeuristic(a.state, agent) + Constants::oneStepWeight * a.cost * (1 + getStateHistory(agent, a.state) - bonus * a.state.greedy + Constants::penaltyHeadon * a.state.headon);
+            // auto scoreB = admissibleHeuristic(b.state, agent) + Constants::oneStepWeight * b.cost * (1 + getStateHistory(agent, b.state) - bonus * b.state.greedy + Constants::penaltyHeadon * b.state.headon);
             if (scoreA != scoreB)
                 return scoreA < scoreB;
             return false;
@@ -1351,7 +1357,7 @@ void dumpOutputToJson(std::string outputFile,
         // std::cout<<sol.cost<<std::endl;
     }
 
-    double makespan = 0, flowtime = 0, cost = 0;
+    double makespan = 0, flowtime = 0, cost = 0, makespanStep = 0;
     for (const auto &s : solution)
         cost += s.cost;
 
@@ -1371,6 +1377,7 @@ void dumpOutputToJson(std::string outputFile,
                 current_makespan += Constants::r * Constants::deltat;
         }
         flowtime += current_makespan;
+        makespanStep = std::max<double>(makespanStep, solution[a].states.size());
         if (current_makespan > makespan)
             makespan = current_makespan;
     }
@@ -1378,7 +1385,8 @@ void dumpOutputToJson(std::string outputFile,
     nlohmann::json output;
     // Add statistics data to the JSON object
     output["cost"] = flowtime;
-    output["makespan"] = makespan;
+    output["makespan"] = makespanStep * Constants::dx[0];
+    output["makespanStep"] = makespanStep;
     output["flowtime"] = flowtime;
     output["runtime"] = timer;
     output["solved"] = solved;
@@ -1386,17 +1394,17 @@ void dumpOutputToJson(std::string outputFile,
     std::vector<std::vector<std::vector<double>>> paths;
     std::cout << "solution size=" << solution.size() << std::endl;
     // Add schedule data to the JSON object
-    for (size_t a = 0; a < solution.size(); ++a)
-    {
-        // nlohmann::json agentData;
-        std::vector<std::vector<double>> path;
-        for (const auto &state : solution[a].states)
-        {
-            path.push_back({state.first.x, state.first.y, state.first.yaw});
-        }
-        paths.push_back(path);
-    }
-    output["paths"] = paths;
+    // for (size_t a = 0; a < solution.size(); ++a)
+    // {
+    //     // nlohmann::json agentData;
+    //     std::vector<std::vector<double>> path;
+    //     for (const auto &state : solution[a].states)
+    //     {
+    //         path.push_back({state.first.x, state.first.y, state.first.yaw});
+    //     }
+    //     paths.push_back(path);
+    // }
+    // output["paths"] = paths;
 
     // Save the JSON data to a file
     std::ofstream file(outputFile);

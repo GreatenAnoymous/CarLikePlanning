@@ -133,7 +133,7 @@ class Animation:
                                             repeat=False,
                                             blit=True)
 
-        # self.anim.save('./demo_obs_pibt.mp4',fps=10)
+        self.anim.save('./demo_ecbs.mp4',fps=10)
 
     def save(self, file_name, speed):
         self.anim.save(

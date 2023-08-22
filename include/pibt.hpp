@@ -40,9 +40,7 @@ namespace libMultiRobotPlanning
         std::vector<double> distance_heuristic;
         std::vector<size_t> agents_list;
 
-        std::vector<std::map<int, float>> history;
 
-        // std::priority_queue<int,std::vector<int>,sc
         int time_steps;
         int max_timesteps = 500;
         bool solved = false;
@@ -218,19 +216,12 @@ namespace libMultiRobotPlanning
                 {
                     distance_heuristic[i] = 0;
                     lastGoalReleasedTime[i] = time_steps;
+                    m_env.clearHistory(i);
                 }
             }
             return flag;
         }
 
-        void sortNeighbors(std::vector<Neighbor<State, Action, double>> &neighbors, int agent)
-        {
-            auto comparator = [&](Neighbor<State, Action, double> &a, Neighbor<State, Action, double> &b)
-            {
-                return m_env.admissibleHeuristic(a.state, agent) < m_env.admissibleHeuristic(b.state, agent);
-            };
-            std::sort(neighbors.begin(), neighbors.end(), comparator);
-        }
 
         /* data */
     public:
@@ -248,7 +239,6 @@ namespace libMultiRobotPlanning
             }
             solution = std::vector<PlanResult<State, Action, Cost>>(num_agents, PlanResult<State, Action, Cost>());
             update_priorities();
-            history = std::vector<std::map<int, float>>(num_agents, std::map<int, float>());
         }
 
         bool isSolved()
@@ -258,7 +248,7 @@ namespace libMultiRobotPlanning
 
         double calcArrivalRate()
         {
-            double count=0;
+            double count = 0;
             for (int i = 0; i < solution.size(); i++)
             {
                 auto goal = m_env.getGoal(i);
@@ -266,9 +256,10 @@ namespace libMultiRobotPlanning
 
                 auto dyaw = pow(cos(goal.yaw) - cos(curr.yaw), 2) + pow(sin(goal.yaw) - sin(curr.yaw), 2);
                 auto dist = sqrt(pow(goal.x - curr.x, 2) + pow(goal.y - curr.y, 2) + dyaw);
-                if (dist < 1e-1) count++;
+                if (dist < 1e-1)
+                    count++;
             }
-            return count/((double) solution.size());
+            return count / ((double)solution.size());
         }
 
         void setStates(int agent, State &state)
