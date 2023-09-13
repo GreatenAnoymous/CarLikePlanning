@@ -8,7 +8,7 @@ In this repo, we provide the implementation of CL-ECBS, CL-CBS, CL-PIBT, SHA* al
 
 The video demonstration can be found here
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/ua31edNfau0?si=3lJpYY1jD2O8TA_3" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+[![IMAGE ALT TEXT](image.png)](https://youtu.be/ua31edNfau0?si=APlJP0wSuRbjC1TV)
 
 ## Source Code
 ### Requirement
